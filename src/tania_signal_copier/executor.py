@@ -3,35 +3,96 @@ MT5 trade executor for the Telegram Signal Bot.
 
 This module handles all MetaTrader 5 trade operations including
 opening, modifying, and closing positions.
+
+Includes automatic reconnection to handle connection drops gracefully.
 """
+
+import time
+from functools import wraps
+from typing import Any, Callable, TypeVar
 
 from tania_signal_copier.models import OrderType, TradeSignal
 from tania_signal_copier.mt5_adapter import MT5Adapter, create_mt5_adapter
+
+T = TypeVar("T")
+
+
+def with_reconnect(method: Callable[..., T]) -> Callable[..., T]:
+    """Decorator that ensures connection before executing a method.
+
+    If connection is lost, attempts to reconnect before retrying the operation.
+    """
+
+    @wraps(method)
+    def wrapper(self: "MT5Executor", *args: Any, **kwargs: Any) -> T:
+        # First attempt
+        if self._ensure_connected():
+            try:
+                return method(self, *args, **kwargs)
+            except Exception as e:
+                print(f"Operation failed: {e}, attempting reconnect...")
+                self.connected = False
+
+        # Reconnect and retry
+        if self._reconnect():
+            return method(self, *args, **kwargs)
+
+        # Return appropriate failure based on method
+        method_name = method.__name__
+        if method_name in ("execute_signal", "modify_position", "close_position"):
+            return {"success": False, "error": "Connection lost and reconnect failed"}  # type: ignore
+        elif method_name == "get_account_balance":
+            return 0.0  # type: ignore
+        elif method_name in ("get_position", "get_symbol_info"):
+            return None  # type: ignore
+        elif method_name == "is_position_profitable":
+            return False  # type: ignore
+        elif method_name == "get_current_price":
+            return None  # type: ignore
+        else:
+            return None  # type: ignore
+
+    return wrapper
 
 
 class MT5Executor:
     """Handles trade execution on MetaTrader 5.
 
     Provides high-level trading operations built on top of the MT5Adapter,
-    including position management and risk calculations.
+    including position management, risk calculations, and automatic reconnection.
 
     Attributes:
         connected: Whether successfully connected to MT5
+        max_reconnect_attempts: Maximum number of reconnection attempts
+        reconnect_delay: Delay in seconds between reconnection attempts
     """
 
-    def __init__(self, login: int, password: str, server: str) -> None:
+    def __init__(
+        self,
+        login: int,
+        password: str,
+        server: str,
+        max_reconnect_attempts: int = 5,
+        reconnect_delay: float = 2.0,
+    ) -> None:
         """Initialize executor with MT5 credentials.
 
         Args:
             login: MT5 account login number
             password: MT5 account password
             server: MT5 broker server name
+            max_reconnect_attempts: Max reconnection attempts (default: 5)
+            reconnect_delay: Delay between reconnection attempts in seconds (default: 2.0)
         """
         self._login = login
         self._password = password
         self._server = server
         self._mt5: MT5Adapter | None = None
         self.connected = False
+        self.max_reconnect_attempts = max_reconnect_attempts
+        self.reconnect_delay = reconnect_delay
+        self._last_ping_time: float = 0
+        self._ping_interval: float = 30.0  # Check connection every 30 seconds
 
     def connect(self) -> bool:
         """Initialize and connect to MT5.
@@ -55,6 +116,7 @@ class MT5Executor:
             return False
 
         self.connected = True
+        self._last_ping_time = time.time()
         account_info = self._mt5.account_info()
         if account_info:
             print(f"Connected to MT5: {account_info.name}, Balance: {account_info.balance}")
@@ -68,8 +130,111 @@ class MT5Executor:
             self._mt5.shutdown()
         self.connected = False
 
+    def is_alive(self) -> bool:
+        """Check if the connection to MT5 is alive.
+
+        Performs a ping to verify the connection is responsive.
+
+        Returns:
+            True if connection is alive, False otherwise
+        """
+        if not self._mt5 or not self.connected:
+            return False
+        try:
+            return self._mt5.ping()
+        except Exception:
+            return False
+
+    def _ensure_connected(self) -> bool:
+        """Ensure we have an active connection, checking periodically.
+
+        Returns:
+            True if connected, False if connection check failed
+        """
+        if not self.connected or not self._mt5:
+            return False
+
+        # Only ping if enough time has passed since last check
+        current_time = time.time()
+        if current_time - self._last_ping_time >= self._ping_interval:
+            if not self.is_alive():
+                self.connected = False
+                return False
+            self._last_ping_time = current_time
+
+        return True
+
+    def _reconnect(self) -> bool:
+        """Attempt to reconnect to MT5 with retries.
+
+        Returns:
+            True if reconnection successful, False otherwise
+        """
+        print("Attempting to reconnect to MT5...")
+
+        # Clean up existing connection
+        if self._mt5:
+            try:
+                self._mt5.shutdown()
+            except Exception:
+                pass
+            self._mt5 = None
+        self.connected = False
+
+        for attempt in range(1, self.max_reconnect_attempts + 1):
+            print(f"Reconnection attempt {attempt}/{self.max_reconnect_attempts}...")
+
+            if self.connect():
+                print("Reconnection successful!")
+                return True
+
+            if attempt < self.max_reconnect_attempts:
+                print(f"Reconnection failed, waiting {self.reconnect_delay}s before retry...")
+                time.sleep(self.reconnect_delay)
+
+        print("All reconnection attempts failed!")
+        return False
+
+    def health_check(self) -> dict:
+        """Perform a comprehensive health check of the MT5 connection.
+
+        Returns:
+            Dict with health status information
+        """
+        status = {
+            "connected": self.connected,
+            "ping_ok": False,
+            "account_accessible": False,
+            "trading_enabled": False,
+            "account_balance": 0.0,
+            "error": None,
+        }
+
+        if not self._mt5 or not self.connected:
+            status["error"] = "Not connected"
+            return status
+
+        try:
+            # Check ping
+            status["ping_ok"] = self._mt5.ping()
+
+            # Check account info
+            account = self._mt5.account_info()
+            if account:
+                status["account_accessible"] = True
+                status["account_balance"] = account.balance
+                status["trading_enabled"] = account.trade_allowed
+
+        except Exception as e:
+            status["error"] = str(e)
+
+        return status
+
+    @with_reconnect
     def get_account_balance(self) -> float:
         """Get current account balance.
+
+        Auto-reconnects if connection is lost.
 
         Returns:
             Account balance or 0.0 if unavailable
@@ -79,8 +244,11 @@ class MT5Executor:
         info = self._mt5.account_info()
         return info.balance if info else 0.0
 
+    @with_reconnect
     def get_symbol_info(self, symbol: str) -> dict | None:
         """Get symbol information, trying common variations.
+
+        Auto-reconnects if connection is lost.
 
         Args:
             symbol: The trading symbol (e.g., "XAUUSD")
@@ -102,8 +270,11 @@ class MT5Executor:
             return None
         return {"info": info, "symbol": symbol}
 
+    @with_reconnect
     def get_position(self, ticket: int) -> dict | None:
         """Get position details by ticket number.
+
+        Auto-reconnects if connection is lost.
 
         Args:
             ticket: The MT5 position ticket
@@ -129,8 +300,11 @@ class MT5Executor:
             }
         return None
 
+    @with_reconnect
     def is_position_profitable(self, ticket: int) -> bool:
         """Check if position is in profit.
+
+        Auto-reconnects if connection is lost.
 
         Args:
             ticket: The MT5 position ticket
@@ -143,6 +317,7 @@ class MT5Executor:
             return False
         return pos["profit"] >= 0
 
+    @with_reconnect
     def execute_signal(
         self,
         signal: TradeSignal,
@@ -151,6 +326,8 @@ class MT5Executor:
         default_lot_size: float = 0.01,
     ) -> dict:
         """Execute a trade signal on MT5.
+
+        Auto-reconnects if connection is lost.
 
         Args:
             signal: The parsed trade signal
@@ -272,6 +449,7 @@ class MT5Executor:
 
         return request
 
+    @with_reconnect
     def modify_position(
         self,
         ticket: int,
@@ -279,6 +457,8 @@ class MT5Executor:
         tp: float | None = None,
     ) -> dict:
         """Modify SL/TP of an existing position.
+
+        Auto-reconnects if connection is lost.
 
         Args:
             ticket: The MT5 position ticket
@@ -315,8 +495,11 @@ class MT5Executor:
             "new_tp": request["tp"],
         }
 
+    @with_reconnect
     def close_position(self, ticket: int) -> dict:
         """Close an open position by placing opposite order.
+
+        Auto-reconnects if connection is lost.
 
         Args:
             ticket: The MT5 position ticket
@@ -415,8 +598,11 @@ class MT5Executor:
         is_buy = order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
         return entry_price - sl_distance if is_buy else entry_price + sl_distance
 
+    @with_reconnect
     def get_current_price(self, symbol: str, for_buy: bool) -> float | None:
         """Get current ask (for buy) or bid (for sell) price.
+
+        Auto-reconnects if connection is lost.
 
         Args:
             symbol: The trading symbol
