@@ -6,19 +6,19 @@ Automates forex trading by reading signals from Telegram and executing on MT5.
 Requirements:
 - Docker with siliconmetatrader5 container running (macOS)
 - Telegram API credentials (api_id, api_hash from https://my.telegram.org)
-- Anthropic API key for Claude signal parsing
+- Claude Code CLI installed and authenticated (uses subscription auth)
 """
 
 import asyncio
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
-from anthropic import Anthropic
-from anthropic.types import TextBlock
+from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk.types import AssistantMessage, TextBlock
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 
@@ -48,8 +48,9 @@ class Config:
     DEFAULT_LOT_SIZE: float = float(os.getenv("DEFAULT_LOT_SIZE", "0.01"))
     MAX_RISK_PERCENT: float = float(os.getenv("MAX_RISK_PERCENT", "2.0"))
 
-    # Claude API
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    # Symbol settings
+    ALLOWED_SYMBOLS: list[str] = field(default_factory=lambda: ["XAUUSD"])
+    SYMBOL_MAP: dict[str, str] = field(default_factory=lambda: {"XAUUSD": "XAUUSDb"})
 
 
 config = Config()
@@ -89,10 +90,11 @@ class TradeSignal:
 class SignalParser:
     """Uses Claude to parse trading signals from various formats."""
 
-    def __init__(self, api_key: str) -> None:
-        self.client = Anthropic(api_key=api_key)
+    def __init__(self) -> None:
+        """Initialize parser. Uses Claude Code subscription auth (no API key needed)."""
+        pass
 
-    def parse_signal(self, message: str) -> TradeSignal | None:
+    async def parse_signal(self, message: str) -> TradeSignal | None:
         """Parse a Telegram message into a structured trade signal."""
         prompt = f"""Analyze this forex trading signal and extract the trade details.
 Return a JSON object with these fields:
@@ -114,16 +116,19 @@ Signal message:
 Return ONLY valid JSON, no explanation."""
 
         try:
-            response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=500,
-                messages=[{"role": "user", "content": prompt}],
+            options = ClaudeAgentOptions(
+                allowed_tools=[],  # No tools needed for parsing
+                max_turns=1,  # Single turn for parsing
             )
 
-            content_block = response.content[0]
-            if not isinstance(content_block, TextBlock):
-                return None
-            result_text = content_block.text.strip()
+            result_text = ""
+            async for msg in query(prompt=prompt, options=options):
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            result_text += block.text
+
+            result_text = result_text.strip()
             # Clean up potential markdown code blocks
             result_text = re.sub(r"^```json\s*", "", result_text)
             result_text = re.sub(r"\s*```$", "", result_text)
@@ -214,15 +219,23 @@ class MT5Executor:
             return None
         return {"info": info, "symbol": symbol}
 
-    def execute_signal(self, signal: TradeSignal, lot_size: float | None = None) -> dict:
+    def execute_signal(
+        self,
+        signal: TradeSignal,
+        lot_size: float | None = None,
+        broker_symbol: str | None = None,
+    ) -> dict:
         """Execute a trade signal on MT5."""
         if not self.connected or not self._mt5:
             return {"success": False, "error": "Not connected to MT5"}
 
+        # Use broker symbol if provided, otherwise use signal symbol
+        symbol_to_find = broker_symbol or signal.symbol
+
         # Get symbol info
-        sym_data = self.get_symbol_info(signal.symbol)
+        sym_data = self.get_symbol_info(symbol_to_find)
         if not sym_data:
-            return {"success": False, "error": f"Symbol {signal.symbol} not found"}
+            return {"success": False, "error": f"Symbol {symbol_to_find} not found"}
 
         symbol = sym_data["symbol"]
         symbol_info = sym_data["info"]
@@ -310,7 +323,7 @@ class TelegramMT5Bot:
     """Main bot that connects Telegram signals to MT5."""
 
     def __init__(self) -> None:
-        self.parser = SignalParser(config.ANTHROPIC_API_KEY)
+        self.parser = SignalParser()
         self.executor = MT5Executor(
             config.MT5_LOGIN,
             config.MT5_PASSWORD,
@@ -362,7 +375,7 @@ class TelegramMT5Bot:
         print(f"Message: {message[:100]}...")
 
         # Parse the signal
-        signal = self.parser.parse_signal(message)
+        signal = await self.parser.parse_signal(message)
 
         if signal is None:
             print("Not a valid trading signal, skipping.")
@@ -381,8 +394,18 @@ class TelegramMT5Bot:
             print(f"Low confidence ({signal.confidence:.0%}), skipping execution.")
             return
 
+        # Check if symbol is allowed
+        if signal.symbol not in config.ALLOWED_SYMBOLS:
+            print(f"Symbol {signal.symbol} not in allowed list {config.ALLOWED_SYMBOLS}, skipping.")
+            return
+
+        # Map symbol to broker-specific name
+        broker_symbol = config.SYMBOL_MAP.get(signal.symbol, signal.symbol)
+        if broker_symbol != signal.symbol:
+            print(f"  Mapped to broker symbol: {broker_symbol}")
+
         # Execute the trade
-        result = self.executor.execute_signal(signal)
+        result = self.executor.execute_signal(signal, broker_symbol=broker_symbol)
 
         if result["success"]:
             print("\nTrade executed successfully!")
