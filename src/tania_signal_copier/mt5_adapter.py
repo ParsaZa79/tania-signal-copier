@@ -22,6 +22,7 @@ class MT5Adapter:
     # MT5 constants
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_PENDING = 5
+    TRADE_ACTION_SLTP = 6  # Modify SL/TP of existing position
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
     ORDER_TYPE_BUY_LIMIT = 2
@@ -120,6 +121,28 @@ class MT5Adapter:
         if self._client:
             return self._client.ping()
         return False
+
+    def positions_total(self) -> int:
+        """Get total number of open positions."""
+        if self._client:
+            return self._client.positions_total()
+        return 0
+
+    def positions_get(
+        self,
+        symbol: str | None = None,
+        ticket: int | None = None,
+    ) -> list[Any]:
+        """Get open positions, optionally filtered by symbol or ticket."""
+        if not self._client:
+            return []
+        if ticket is not None:
+            result = self._client.positions_get(ticket=ticket)
+        elif symbol is not None:
+            result = self._client.positions_get(symbol=symbol)
+        else:
+            result = self._client.positions_get()
+        return list(result) if result else []
 
 
 def create_mt5_adapter(

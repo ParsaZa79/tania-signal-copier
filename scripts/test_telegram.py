@@ -51,6 +51,14 @@ async def main() -> None:
             print(f"--- Message {i} ---")
             print(f"ID: {msg.id}")
             print(f"Date: {msg.date}")
+
+            # Check if this is a reply to another message
+            if msg.reply_to:
+                reply_to_id = msg.reply_to.reply_to_msg_id
+                print(f"Reply to: Message ID {reply_to_id}")
+            else:
+                print("Reply to: (not a reply)")
+
             print("Text:")
             print(msg.text or "(no text - possibly media)")
             print()
@@ -58,6 +66,8 @@ async def main() -> None:
             log_lines.append(f"--- Message {i} ---\n")
             log_lines.append(f"ID: {msg.id}\n")
             log_lines.append(f"Date: {msg.date}\n")
+            if msg.reply_to:
+                log_lines.append(f"Reply to: Message ID {msg.reply_to.reply_to_msg_id}\n")
             log_lines.append(f"Text:\n{msg.text or '(no text)'}\n\n")
 
     except Exception as e:
