@@ -224,6 +224,15 @@ class MT5Executor:
 
         is_buy = signal.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
 
+        # Determine filling mode from symbol info
+        sym_info = self._mt5.symbol_info(symbol)
+        if sym_info and sym_info.filling_mode & 1:  # FOK supported
+            filling_mode = self._mt5.ORDER_FILLING_FOK
+        elif sym_info and sym_info.filling_mode & 2:  # IOC supported
+            filling_mode = self._mt5.ORDER_FILLING_IOC
+        else:
+            filling_mode = self._mt5.ORDER_FILLING_RETURN
+
         request: dict = {
             "action": self._mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
@@ -234,7 +243,7 @@ class MT5Executor:
             "magic": 123456,
             "comment": "TG Signal Bot",
             "type_time": self._mt5.ORDER_TIME_GTC,
-            "type_filling": self._mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_mode,
         }
 
         # Add SL/TP
@@ -332,6 +341,15 @@ class MT5Executor:
         close_type = self._mt5.ORDER_TYPE_SELL if is_buy else self._mt5.ORDER_TYPE_BUY
         price = tick.bid if is_buy else tick.ask
 
+        # Determine filling mode from symbol info
+        sym_info = self._mt5.symbol_info(pos["symbol"])
+        if sym_info and sym_info.filling_mode & 1:  # FOK supported
+            filling_mode = self._mt5.ORDER_FILLING_FOK
+        elif sym_info and sym_info.filling_mode & 2:  # IOC supported
+            filling_mode = self._mt5.ORDER_FILLING_IOC
+        else:
+            filling_mode = self._mt5.ORDER_FILLING_RETURN
+
         request = {
             "action": self._mt5.TRADE_ACTION_DEAL,
             "position": ticket,
@@ -343,7 +361,7 @@ class MT5Executor:
             "magic": 123456,
             "comment": "TG Signal Bot Close",
             "type_time": self._mt5.ORDER_TIME_GTC,
-            "type_filling": self._mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_mode,
         }
 
         result = self._mt5.order_send(request)

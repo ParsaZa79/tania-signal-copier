@@ -30,7 +30,9 @@ class MT5Adapter:
     ORDER_TYPE_BUY_STOP = 4
     ORDER_TYPE_SELL_STOP = 5
     ORDER_TIME_GTC = 0
-    ORDER_FILLING_IOC = 1
+    ORDER_FILLING_FOK = 0  # Fill or Kill
+    ORDER_FILLING_IOC = 1  # Immediate or Cancel
+    ORDER_FILLING_RETURN = 2  # Return (partial fill)
     TRADE_RETCODE_DONE = 10009
 
     def __init__(
@@ -52,7 +54,8 @@ class MT5Adapter:
                 port=self.port,
                 keepalive=self.keepalive,
             )
-            return self._client.ping()
+            # Must call initialize() on the client for data operations to work
+            return self._client.initialize()
         except Exception as e:
             print(f"MT5 initialization failed: {e}")
             return False
