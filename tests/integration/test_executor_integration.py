@@ -61,20 +61,24 @@ class TestMT5ExecutorAccountOperations:
         assert isinstance(balance, float)
         assert balance >= 0
 
-    def test_get_account_balance_not_connected(
+    def test_get_account_balance_auto_reconnects(
         self, mt5_credentials: dict, mt5_available: bool
     ) -> None:
-        """Test balance returns 0 when not connected."""
+        """Test balance auto-reconnects when not initially connected."""
         executor = MT5Executor(
             login=mt5_credentials["login"],
             password=mt5_credentials["password"],
             server=mt5_credentials["server"],
         )
-        # Not connected
+        # Not connected initially
 
-        balance = executor.get_account_balance()
-
-        assert balance == 0.0
+        try:
+            balance = executor.get_account_balance()
+            # With auto-reconnect, should successfully get balance
+            assert balance > 0
+            assert executor.connected is True
+        finally:
+            executor.disconnect()
 
 
 @pytest.mark.integration
@@ -222,17 +226,19 @@ class TestMT5ExecutorSignalExecution:
     Marked as slow because they involve actual trade execution.
     """
 
-    def test_execute_signal_not_connected(self, mt5_credentials: dict) -> None:
-        """Test execution fails when not connected."""
+    def test_execute_signal_auto_reconnects(
+        self, mt5_credentials: dict, mt5_available: bool, test_symbol: str
+    ) -> None:
+        """Test execution auto-reconnects when not initially connected."""
         executor = MT5Executor(
             login=mt5_credentials["login"],
             password=mt5_credentials["password"],
             server=mt5_credentials["server"],
         )
-        # Not connected
+        # Not connected initially
 
         signal = TradeSignal(
-            symbol="EURUSD",
+            symbol=test_symbol,
             order_type=OrderType.BUY,
             entry_price=None,
             stop_loss=None,
@@ -240,10 +246,14 @@ class TestMT5ExecutorSignalExecution:
             lot_size=0.01,
         )
 
-        result = executor.execute_signal(signal)
-
-        assert result["success"] is False
-        assert "Not connected" in result["error"]
+        try:
+            result = executor.execute_signal(signal)
+            # With auto-reconnect, it should connect and attempt the trade
+            # Trade may fail for other reasons (market closed, etc) but not "Not connected"
+            if not result["success"]:
+                assert "Not connected" not in result.get("error", "")
+        finally:
+            executor.disconnect()
 
     def test_execute_signal_invalid_symbol(self, mt5_executor: MT5Executor) -> None:
         """Test execution fails with invalid symbol."""
@@ -280,6 +290,10 @@ class TestMT5ExecutorSignalExecution:
 
         result = mt5_executor.execute_signal(signal)
 
+        # Skip if market is closed (e.g., weekends, holidays)
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
         assert result["success"] is True
         assert "ticket" in result
         assert result["ticket"] > 0
@@ -307,6 +321,10 @@ class TestMT5ExecutorSignalExecution:
         )
 
         result = mt5_executor.execute_signal(signal)
+
+        # Skip if market is closed (e.g., weekends, holidays)
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
 
         assert result["success"] is True
         assert "ticket" in result
@@ -339,6 +357,10 @@ class TestMT5ExecutorSignalExecution:
 
         result = mt5_executor.execute_signal(signal)
 
+        # Skip if market is closed (e.g., weekends, holidays)
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
         assert result["success"] is True
 
         # Verify position has SL/TP
@@ -359,18 +381,26 @@ class TestMT5ExecutorPositionManagement:
     WARNING: These tests may place real orders!
     """
 
-    def test_modify_position_not_connected(self, mt5_credentials: dict) -> None:
-        """Test modify fails when not connected."""
+    def test_modify_position_auto_reconnects(
+        self, mt5_credentials: dict, mt5_available: bool
+    ) -> None:
+        """Test modify auto-reconnects when not initially connected."""
         executor = MT5Executor(
             login=mt5_credentials["login"],
             password=mt5_credentials["password"],
             server=mt5_credentials["server"],
         )
+        # Not connected initially
 
-        result = executor.modify_position(ticket=123, sl=1.0)
-
-        assert result["success"] is False
-        assert "Not connected" in result["error"]
+        try:
+            result = executor.modify_position(ticket=123, sl=1.0)
+            # With auto-reconnect, should connect first
+            # Position 123 doesn't exist, so will fail with "not found", not "Not connected"
+            assert result["success"] is False
+            assert "Not connected" not in result.get("error", "")
+            assert executor.connected is True
+        finally:
+            executor.disconnect()
 
     def test_modify_position_invalid_ticket(self, mt5_executor: MT5Executor) -> None:
         """Test modify fails with invalid ticket."""
@@ -382,18 +412,26 @@ class TestMT5ExecutorPositionManagement:
         assert result["success"] is False
         assert "not found" in result["error"]
 
-    def test_close_position_not_connected(self, mt5_credentials: dict) -> None:
-        """Test close fails when not connected."""
+    def test_close_position_auto_reconnects(
+        self, mt5_credentials: dict, mt5_available: bool
+    ) -> None:
+        """Test close auto-reconnects when not initially connected."""
         executor = MT5Executor(
             login=mt5_credentials["login"],
             password=mt5_credentials["password"],
             server=mt5_credentials["server"],
         )
+        # Not connected initially
 
-        result = executor.close_position(ticket=123)
-
-        assert result["success"] is False
-        assert "Not connected" in result["error"]
+        try:
+            result = executor.close_position(ticket=123)
+            # With auto-reconnect, should connect first
+            # Position 123 doesn't exist, so will fail with "not found", not "Not connected"
+            assert result["success"] is False
+            assert "Not connected" not in result.get("error", "")
+            assert executor.connected is True
+        finally:
+            executor.disconnect()
 
     def test_close_position_invalid_ticket(self, mt5_executor: MT5Executor) -> None:
         """Test close fails with invalid ticket."""
@@ -421,6 +459,11 @@ class TestMT5ExecutorPositionManagement:
         )
 
         open_result = mt5_executor.execute_signal(signal)
+
+        # Skip if market is closed (e.g., weekends, holidays)
+        if not open_result["success"] and "Market closed" in open_result.get("error", ""):
+            pytest.skip("Market is closed")
+
         assert open_result["success"] is True
         ticket = open_result["ticket"]
 
