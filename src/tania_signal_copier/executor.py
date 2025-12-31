@@ -365,17 +365,34 @@ class MT5Executor:
 
         # Build order request
         request = self._build_order_request(signal, symbol, lots, tick)
+        print(f"    [DEBUG] Execute request: {request}")
+
+        # Verify connection before sending
+        if not self._mt5.ping():
+            print("    [DEBUG] Connection lost before execute, attempting reconnect...")
+            if not self._reconnect():
+                return {"success": False, "error": "Connection lost and reconnect failed"}
 
         # Send the order
         result = self._mt5.order_send(request)
+        print(f"    [DEBUG] order_send result: {result}")
 
-        if result is None or result.retcode != self._mt5.TRADE_RETCODE_DONE:
-            error_msg = result.comment if result else "Order send failed"
-            retcode = result.retcode if result else -1
+        if result is None:
+            last_error = self._mt5.last_error()
+            print(f"    [DEBUG] Last error: {last_error}")
+            return {
+                "success": False,
+                "error": f"Order send failed (None), last_error: {last_error}",
+                "retcode": -1,
+            }
+
+        if result.retcode != self._mt5.TRADE_RETCODE_DONE:
+            error_msg = result.comment if result.comment else f"Retcode {result.retcode}"
+            print(f"    [DEBUG] Order failed - retcode: {result.retcode}, comment: {result.comment}")
             return {
                 "success": False,
                 "error": f"Order failed: {error_msg}",
-                "retcode": retcode,
+                "retcode": result.retcode,
             }
 
         return {
@@ -423,11 +440,14 @@ class MT5Executor:
             "type_filling": filling_mode,
         }
 
-        # Add SL/TP
+        # Add SL/TP (ensure floats and normalize to symbol digits)
+        digits = sym_info.digits if sym_info else 2
         if signal.stop_loss:
-            request["sl"] = signal.stop_loss
+            request["sl"] = round(float(signal.stop_loss), digits)
         if signal.take_profits:
-            request["tp"] = signal.take_profits[0]
+            # Use the most profitable TP: lowest for SELL, highest for BUY
+            best_tp = min(signal.take_profits) if not is_buy else max(signal.take_profits)
+            request["tp"] = round(float(best_tp), digits)
 
         # Handle pending orders
         if signal.order_type in [
@@ -475,18 +495,54 @@ class MT5Executor:
         if not pos:
             return {"success": False, "error": f"Position {ticket} not found"}
 
+        new_sl = float(sl) if sl is not None else pos["sl"]
+        new_tp = float(tp) if tp is not None else pos["tp"]
+
+        # Get symbol info for proper formatting
+        sym_info = self._mt5.symbol_info(pos["symbol"])
+        if sym_info:
+            # Normalize SL/TP to proper decimal places
+            digits = sym_info.digits
+            new_sl = round(new_sl, digits)
+            new_tp = round(new_tp, digits) if new_tp else 0.0
+
+        # Ensure all values are proper types for MT5
         request = {
             "action": self._mt5.TRADE_ACTION_SLTP,
-            "position": ticket,
-            "symbol": pos["symbol"],
-            "sl": sl if sl is not None else pos["sl"],
-            "tp": tp if tp is not None else pos["tp"],
+            "position": int(ticket),
+            "symbol": str(pos["symbol"]),
+            "volume": float(pos["volume"]),
+            "sl": float(new_sl),
+            "tp": float(new_tp),
+            "magic": 123456,
         }
 
+        print(f"    [DEBUG] Modify request: {request}")
+        print(f"    [DEBUG] Position info: {pos}")
+
+        # Verify connection before sending
+        if not self._mt5.ping():
+            print("    [DEBUG] Connection lost, attempting reconnect...")
+            if not self._reconnect():
+                return {"success": False, "error": "Connection lost and reconnect failed"}
+
         result = self._mt5.order_send(request)
-        if result is None or result.retcode != self._mt5.TRADE_RETCODE_DONE:
-            error_msg = result.comment if result else "Modify failed"
-            return {"success": False, "error": error_msg}
+        print(f"    [DEBUG] order_send result: {result}")
+
+        if result is None:
+            # Try to get more info about what went wrong
+            last_error = self._mt5.last_error()
+            print(f"    [DEBUG] Last error: {last_error}")
+            return {"success": False, "error": f"order_send returned None, last_error: {last_error}"}
+
+        if result.retcode != self._mt5.TRADE_RETCODE_DONE:
+            error_msg = result.comment if result.comment else f"Retcode {result.retcode}"
+            print(f"    [DEBUG] Modify failed - retcode: {result.retcode}, comment: {result.comment}")
+            return {
+                "success": False,
+                "error": error_msg,
+                "retcode": result.retcode,
+            }
 
         return {
             "success": True,

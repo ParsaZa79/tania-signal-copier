@@ -187,7 +187,7 @@ class TelegramMT5Bot:
         if pending_pos and is_complete:
             print(f"  Found pending position {pending_pos.mt5_ticket} for {broker_symbol}")
             print("  Completing pending position instead of opening new trade...")
-            await self._complete_pending_position(pending_pos, signal)
+            await self._complete_pending_position(msg_id, pending_pos, signal)
             return
 
         # Calculate default SL if incomplete
@@ -234,16 +234,39 @@ class TelegramMT5Bot:
 
     async def _complete_pending_position(
         self,
+        new_msg_id: int,
         pending_pos: TrackedPosition,
         signal: TradeSignal,
     ) -> None:
-        """Complete a pending position with SL/TP from new complete signal."""
+        """Complete a pending position with SL/TP from new complete signal.
+
+        Args:
+            new_msg_id: The message ID of the complete signal (for future replies)
+            pending_pos: The pending position to complete
+            signal: The complete signal with SL/TP values
+        """
         # Cancel the timeout
-        self._cancel_timeout(pending_pos.telegram_msg_id)
+        old_msg_id = pending_pos.telegram_msg_id
+        self._cancel_timeout(old_msg_id)
 
         # Determine new SL/TP values
         new_sl = signal.stop_loss or pending_pos.stop_loss
-        new_tp = signal.take_profits[0] if signal.take_profits else None
+        # Use the most profitable TP: lowest for SELL, highest for BUY
+        new_tp = self._get_best_tp(signal.take_profits, pending_pos.order_type)
+
+        print(f"  Modifying position {pending_pos.mt5_ticket}...")
+        print(f"  New SL: {new_sl}, New TP: {new_tp}")
+
+        # Verify position still exists on MT5
+        mt5_pos = self.executor.get_position(pending_pos.mt5_ticket)
+        if mt5_pos is None:
+            print(f"\nWARNING: Position {pending_pos.mt5_ticket} no longer exists on MT5!")
+            print("  The position may have been closed (SL hit or manual close)")
+            pending_pos.status = PositionStatus.CLOSED
+            self.state.save()
+            return
+
+        print(f"  Position verified on MT5: {mt5_pos['symbol']} @ {mt5_pos['price_open']}")
 
         result = self.executor.modify_position(pending_pos.mt5_ticket, sl=new_sl, tp=new_tp)
 
@@ -252,13 +275,40 @@ class TelegramMT5Bot:
             pending_pos.take_profits = signal.take_profits
             pending_pos.is_complete = True
             pending_pos.status = PositionStatus.OPEN
+
+            # Update the message ID so replies to the complete signal can find this position
+            pending_pos.telegram_msg_id = new_msg_id
+            self.state.remove_position(old_msg_id)
+            self.state.add_position(pending_pos)
             self.state.save()
+
             print(f"\nPosition {pending_pos.mt5_ticket} completed successfully!")
             print(f"  SL: {new_sl}")
             print(f"  TP: {new_tp}")
             print(f"  TPs: {signal.take_profits}")
+            print(f"  Updated tracking: msg {old_msg_id} -> msg {new_msg_id}")
         else:
             print(f"\nFailed to complete position: {result['error']}")
+            print(f"  Full result: {result}")
+
+    def _get_best_tp(self, take_profits: list[float], order_type: OrderType) -> float | None:
+        """Get the most profitable TP based on order direction.
+
+        For SELL: lowest TP (price goes down = profit)
+        For BUY: highest TP (price goes up = profit)
+
+        Args:
+            take_profits: List of take profit prices
+            order_type: The order direction (BUY/SELL)
+
+        Returns:
+            The most profitable TP, or None if no TPs
+        """
+        if not take_profits:
+            return None
+
+        is_sell = order_type in [OrderType.SELL, OrderType.SELL_LIMIT, OrderType.SELL_STOP]
+        return min(take_profits) if is_sell else max(take_profits)
 
     def _calculate_default_sl(self, broker_symbol: str, signal: TradeSignal) -> float | None:
         """Calculate default SL based on risk settings."""
