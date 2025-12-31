@@ -161,6 +161,9 @@ class TelegramMT5Bot:
             MessageType.CLOSE_SIGNAL: lambda: self._handle_close_signal(
                 reply_to_msg_id or self.state.last_signal_msg_id, signal
             ),
+            MessageType.COMPOUND_ACTION: lambda: self._handle_compound_action(
+                msg_id, reply_to_msg_id or self.state.last_signal_msg_id, signal
+            ),
         }
 
         handler = handlers.get(signal.message_type)
@@ -292,23 +295,23 @@ class TelegramMT5Bot:
             print(f"  Full result: {result}")
 
     def _get_best_tp(self, take_profits: list[float], order_type: OrderType) -> float | None:
-        """Get the most profitable TP based on order direction.
+        """Get the least profitable (closest) TP based on order direction.
 
-        For SELL: lowest TP (price goes down = profit)
-        For BUY: highest TP (price goes up = profit)
+        For SELL: highest TP (closest to entry = less profit)
+        For BUY: lowest TP (closest to entry = less profit)
 
         Args:
             take_profits: List of take profit prices
             order_type: The order direction (BUY/SELL)
 
         Returns:
-            The most profitable TP, or None if no TPs
+            The least profitable TP, or None if no TPs
         """
         if not take_profits:
             return None
 
         is_sell = order_type in [OrderType.SELL, OrderType.SELL_LIMIT, OrderType.SELL_STOP]
-        return min(take_profits) if is_sell else max(take_profits)
+        return max(take_profits) if is_sell else min(take_profits)
 
     def _calculate_default_sl(self, broker_symbol: str, signal: TradeSignal) -> float | None:
         """Calculate default SL based on risk settings."""
@@ -489,6 +492,123 @@ class TelegramMT5Bot:
             print(f"Position {pos.mt5_ticket} closed at {result['closed_at']}")
         else:
             print(f"Failed to close position: {result['error']}")
+
+    async def _handle_compound_action(
+        self,
+        msg_id: int,
+        target_msg_id: int | None,
+        signal: TradeSignal,
+    ) -> None:
+        """Handle compound action containing multiple operations.
+
+        A compound action can contain both a new pending order AND a modification
+        to an existing position. For example:
+        - "Add Sell-Limit 4342-4343, TP 4334, TP 4320, Update SL to 4344.5"
+
+        This processes modifications first (to protect the losing position),
+        then places new pending orders.
+        """
+        if not signal.actions:
+            print("Compound action has no actions to process")
+            return
+
+        print(f"\nProcessing compound action with {len(signal.actions)} actions...")
+
+        # Get the original position if this is a reply
+        original_pos = None
+        if target_msg_id:
+            original_pos = self.state.get_position_by_msg_id(target_msg_id)
+            if original_pos:
+                print(f"  Target position: {original_pos.mt5_ticket} ({original_pos.symbol})")
+
+        # Separate actions by type
+        modification_actions = [a for a in signal.actions if a.get("action_type") == "modification"]
+        new_signal_actions = [a for a in signal.actions if a.get("action_type") == "new_signal"]
+
+        # Step 1: Apply modifications FIRST (protects the losing position)
+        modification_sl = None
+        for action in modification_actions:
+            new_sl = action.get("new_stop_loss")
+            new_tp = action.get("new_take_profit")
+
+            if original_pos and original_pos.status != PositionStatus.CLOSED:
+                print(f"  Applying modification: SL={new_sl}, TP={new_tp}")
+                result = self.executor.modify_position(
+                    original_pos.mt5_ticket, sl=new_sl, tp=new_tp
+                )
+                if result["success"]:
+                    if new_sl:
+                        original_pos.stop_loss = new_sl
+                        modification_sl = new_sl  # Save for pending order inheritance
+                    self.state.save()
+                    print(f"  Modified position {original_pos.mt5_ticket}")
+                else:
+                    print(f"  Modification failed: {result['error']}")
+            else:
+                # No original position, just save the SL for pending order
+                modification_sl = new_sl
+                print(f"  No position to modify, will use SL {new_sl} for pending order")
+
+        # Step 2: Place new pending orders SECOND
+        for action in new_signal_actions:
+            order_type_str = action.get("order_type")
+            if not order_type_str:
+                print("  Skipping action with no order_type")
+                continue
+
+            try:
+                order_type = OrderType(order_type_str)
+            except ValueError:
+                print(f"  Invalid order_type: {order_type_str}")
+                continue
+
+            # Determine symbol (from action, signal, or original position)
+            symbol = signal.symbol
+            if not symbol and original_pos:
+                symbol = original_pos.symbol
+
+            if not symbol:
+                print("  Cannot determine symbol for pending order")
+                continue
+
+            # Validate symbol
+            if not self._config.symbols.is_allowed(symbol):
+                print(f"  Symbol {symbol} not in allowed list, skipping")
+                continue
+
+            broker_symbol = self._config.symbols.get_broker_symbol(symbol)
+
+            # Determine SL: action's SL > modification SL > calculate default
+            pending_sl = action.get("stop_loss") or modification_sl
+            if pending_sl is None:
+                # Calculate default SL for pending order
+                entry_price = action.get("entry_price")
+                if entry_price:
+                    pending_sl = self.executor.calculate_default_sl(
+                        broker_symbol,
+                        order_type,
+                        entry_price,
+                        self._config.trading.default_lot_size,
+                        self._config.trading.max_risk_percent,
+                    )
+                    print(f"  Calculated default SL for pending order: {pending_sl}")
+
+            # Build pending order signal
+            pending_signal = TradeSignal(
+                symbol=symbol,
+                order_type=order_type,
+                entry_price=action.get("entry_price"),
+                stop_loss=pending_sl,
+                take_profits=action.get("take_profits", []),
+                message_type=MessageType.NEW_SIGNAL_COMPLETE,
+                is_complete=pending_sl is not None and len(action.get("take_profits", [])) > 0,
+            )
+
+            print(f"  Placing pending order: {order_type.value} @ {pending_signal.entry_price}")
+            print(f"    SL: {pending_sl}, TPs: {pending_signal.take_profits}")
+
+            # Execute the pending order
+            await self._handle_new_signal(msg_id, pending_signal, is_complete=pending_signal.is_complete)
 
     async def _start_timeout(self, msg_id: int, ticket: int) -> None:
         """Start timeout for incomplete signal."""

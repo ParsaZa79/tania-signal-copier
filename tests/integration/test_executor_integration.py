@@ -496,3 +496,296 @@ class TestMT5ExecutorPositionManagement:
             # Step 6: Verify closed
             pos = mt5_executor.get_position(ticket)
             assert pos is None
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+class TestMT5ExecutorPendingOrders:
+    """Test pending order placement and management.
+
+    WARNING: These tests place real pending orders! Use demo account only!
+    Pending orders are cancelled after each test.
+    """
+
+    def test_execute_buy_limit_order(
+        self, mt5_executor: MT5Executor, test_symbol: str
+    ) -> None:
+        """Test placing a BUY_LIMIT pending order.
+
+        BUY_LIMIT: Placed below current price, triggers when price drops to level.
+        """
+        price = mt5_executor.get_current_price(test_symbol, for_buy=True)
+        assert price is not None
+
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
+        # Place limit order 50 points below current price
+        limit_price = round(price - (50 * point), sym_data["info"].digits)
+
+        signal = TradeSignal(
+            symbol=test_symbol,
+            order_type=OrderType.BUY_LIMIT,
+            entry_price=limit_price,
+            stop_loss=limit_price - (100 * point),
+            take_profits=[limit_price + (100 * point)],
+            lot_size=0.01,
+            comment="Integration test BUY_LIMIT",
+        )
+
+        result = mt5_executor.execute_signal(signal)
+
+        # Skip if market is closed
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
+        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert "ticket" in result
+        assert result["ticket"] > 0
+
+        # Clean up: cancel the pending order
+        cancel_result = mt5_executor.cancel_pending_order(result["ticket"])
+        assert cancel_result["success"] is True
+
+    def test_execute_sell_limit_order(
+        self, mt5_executor: MT5Executor, test_symbol: str
+    ) -> None:
+        """Test placing a SELL_LIMIT pending order.
+
+        SELL_LIMIT: Placed above current price, triggers when price rises to level.
+        """
+        price = mt5_executor.get_current_price(test_symbol, for_buy=False)
+        assert price is not None
+
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
+        # Place limit order 50 points above current price
+        limit_price = round(price + (50 * point), sym_data["info"].digits)
+
+        signal = TradeSignal(
+            symbol=test_symbol,
+            order_type=OrderType.SELL_LIMIT,
+            entry_price=limit_price,
+            stop_loss=limit_price + (100 * point),
+            take_profits=[limit_price - (100 * point)],
+            lot_size=0.01,
+            comment="Integration test SELL_LIMIT",
+        )
+
+        result = mt5_executor.execute_signal(signal)
+
+        # Skip if market is closed
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
+        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert "ticket" in result
+
+        # Clean up
+        mt5_executor.cancel_pending_order(result["ticket"])
+
+    def test_execute_buy_stop_order(
+        self, mt5_executor: MT5Executor, test_symbol: str
+    ) -> None:
+        """Test placing a BUY_STOP pending order.
+
+        BUY_STOP: Placed above current price, triggers when price rises to level.
+        """
+        price = mt5_executor.get_current_price(test_symbol, for_buy=True)
+        assert price is not None
+
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
+        # Place stop order 50 points above current price
+        stop_price = round(price + (50 * point), sym_data["info"].digits)
+
+        signal = TradeSignal(
+            symbol=test_symbol,
+            order_type=OrderType.BUY_STOP,
+            entry_price=stop_price,
+            stop_loss=stop_price - (100 * point),
+            take_profits=[stop_price + (100 * point)],
+            lot_size=0.01,
+            comment="Integration test BUY_STOP",
+        )
+
+        result = mt5_executor.execute_signal(signal)
+
+        # Skip if market is closed
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
+        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert "ticket" in result
+
+        # Clean up
+        mt5_executor.cancel_pending_order(result["ticket"])
+
+    def test_execute_sell_stop_order(
+        self, mt5_executor: MT5Executor, test_symbol: str
+    ) -> None:
+        """Test placing a SELL_STOP pending order.
+
+        SELL_STOP: Placed below current price, triggers when price drops to level.
+        """
+        price = mt5_executor.get_current_price(test_symbol, for_buy=False)
+        assert price is not None
+
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
+        # Place stop order 50 points below current price
+        stop_price = round(price - (50 * point), sym_data["info"].digits)
+
+        signal = TradeSignal(
+            symbol=test_symbol,
+            order_type=OrderType.SELL_STOP,
+            entry_price=stop_price,
+            stop_loss=stop_price + (100 * point),
+            take_profits=[stop_price - (100 * point)],
+            lot_size=0.01,
+            comment="Integration test SELL_STOP",
+        )
+
+        result = mt5_executor.execute_signal(signal)
+
+        # Skip if market is closed
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
+        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert "ticket" in result
+
+        # Clean up
+        mt5_executor.cancel_pending_order(result["ticket"])
+
+    def test_get_pending_order(
+        self, mt5_executor: MT5Executor, test_symbol: str
+    ) -> None:
+        """Test retrieving a pending order by ticket."""
+        price = mt5_executor.get_current_price(test_symbol, for_buy=True)
+        assert price is not None
+
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
+        limit_price = round(price - (50 * point), sym_data["info"].digits)
+
+        signal = TradeSignal(
+            symbol=test_symbol,
+            order_type=OrderType.BUY_LIMIT,
+            entry_price=limit_price,
+            stop_loss=limit_price - (100 * point),
+            take_profits=[limit_price + (100 * point)],
+            lot_size=0.01,
+        )
+
+        result = mt5_executor.execute_signal(signal)
+
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
+        assert result["success"] is True
+
+        try:
+            # Get the pending order
+            order = mt5_executor.get_pending_order(result["ticket"])
+            assert order is not None
+            assert order["ticket"] == result["ticket"]
+            assert order["symbol"] == test_symbol
+            assert order["type"] == mt5_executor._mt5.ORDER_TYPE_BUY_LIMIT
+        finally:
+            mt5_executor.cancel_pending_order(result["ticket"])
+
+    def test_get_pending_orders_by_symbol(
+        self, mt5_executor: MT5Executor, test_symbol: str
+    ) -> None:
+        """Test retrieving pending orders filtered by symbol."""
+        price = mt5_executor.get_current_price(test_symbol, for_buy=True)
+        assert price is not None
+
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
+        limit_price = round(price - (50 * point), sym_data["info"].digits)
+
+        signal = TradeSignal(
+            symbol=test_symbol,
+            order_type=OrderType.BUY_LIMIT,
+            entry_price=limit_price,
+            stop_loss=None,
+            take_profits=[],
+            lot_size=0.01,
+        )
+
+        result = mt5_executor.execute_signal(signal)
+
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
+        assert result["success"] is True
+
+        try:
+            # Get pending orders for symbol
+            orders = mt5_executor.get_pending_orders(symbol=test_symbol)
+            assert len(orders) >= 1
+
+            # Our order should be in the list
+            tickets = [o["ticket"] for o in orders]
+            assert result["ticket"] in tickets
+        finally:
+            mt5_executor.cancel_pending_order(result["ticket"])
+
+    def test_cancel_pending_order(
+        self, mt5_executor: MT5Executor, test_symbol: str
+    ) -> None:
+        """Test cancelling a pending order."""
+        price = mt5_executor.get_current_price(test_symbol, for_buy=True)
+        assert price is not None
+
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
+        limit_price = round(price - (50 * point), sym_data["info"].digits)
+
+        signal = TradeSignal(
+            symbol=test_symbol,
+            order_type=OrderType.BUY_LIMIT,
+            entry_price=limit_price,
+            stop_loss=None,
+            take_profits=[],
+            lot_size=0.01,
+        )
+
+        result = mt5_executor.execute_signal(signal)
+
+        if not result["success"] and "Market closed" in result.get("error", ""):
+            pytest.skip("Market is closed")
+
+        assert result["success"] is True
+        ticket = result["ticket"]
+
+        # Cancel the order
+        cancel_result = mt5_executor.cancel_pending_order(ticket)
+        assert cancel_result["success"] is True
+        assert cancel_result["ticket"] == ticket
+
+        # Verify order is gone
+        order = mt5_executor.get_pending_order(ticket)
+        assert order is None
+
+    def test_cancel_nonexistent_order(self, mt5_executor: MT5Executor) -> None:
+        """Test cancelling a non-existent order returns error."""
+        result = mt5_executor.cancel_pending_order(ticket=999999999)
+
+        assert result["success"] is False
+        assert "not found" in result["error"]

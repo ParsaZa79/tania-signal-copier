@@ -29,6 +29,7 @@ class MessageType(Enum):
     RE_ENTRY = "re_entry"
     PROFIT_NOTIFICATION = "profit_notification"
     CLOSE_SIGNAL = "close_signal"
+    COMPOUND_ACTION = "compound_action"
     NOT_TRADING = "not_trading"
 
 
@@ -73,6 +74,9 @@ class TradeSignal:
     # Re-entry fields
     re_entry_price: float | None = None
     re_entry_price_max: float | None = None
+
+    # Compound action fields
+    actions: list[dict] = field(default_factory=list)
 
 
 @dataclass

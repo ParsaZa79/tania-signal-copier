@@ -23,6 +23,7 @@ class MT5Adapter:
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_PENDING = 5
     TRADE_ACTION_SLTP = 6  # Modify SL/TP of existing position
+    TRADE_ACTION_REMOVE = 8  # Cancel pending order
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
     ORDER_TYPE_BUY_LIMIT = 2
@@ -101,6 +102,12 @@ class MT5Adapter:
             return self._client.symbol_select(symbol, enable)
         return False
 
+    def order_check(self, request: dict) -> Any:
+        """Check if order can be executed before sending."""
+        if self._client:
+            return self._client.order_check(request)
+        return None
+
     def order_send(self, request: dict) -> Any:
         """Send trading order."""
         if self._client:
@@ -145,6 +152,22 @@ class MT5Adapter:
             result = self._client.positions_get(symbol=symbol)
         else:
             result = self._client.positions_get()
+        return list(result) if result else []
+
+    def orders_get(
+        self,
+        symbol: str | None = None,
+        ticket: int | None = None,
+    ) -> list[Any]:
+        """Get pending orders, optionally filtered by symbol or ticket."""
+        if not self._client:
+            return []
+        if ticket is not None:
+            result = self._client.orders_get(ticket=ticket)
+        elif symbol is not None:
+            result = self._client.orders_get(symbol=symbol)
+        else:
+            result = self._client.orders_get()
         return list(result) if result else []
 
 

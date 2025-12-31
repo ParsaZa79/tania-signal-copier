@@ -17,7 +17,7 @@ from tania_signal_copier.models import MessageType, OrderType, TradeSignal
 class SignalParser:
     """Uses Claude AI to parse trading signals from various formats.
 
-    This parser classifies incoming Telegram messages into 7 types
+    This parser classifies incoming Telegram messages into 8 types
     and extracts structured trading information.
 
     Message Types:
@@ -27,6 +27,7 @@ class SignalParser:
         - RE_ENTRY: New entry for same symbol
         - PROFIT_NOTIFICATION: TP hit, profit info
         - CLOSE_SIGNAL: Close position request
+        - COMPOUND_ACTION: Multiple actions (new order + modification)
         - NOT_TRADING: Non-trading content
     """
 
@@ -39,11 +40,19 @@ CLASSIFICATION RULES:
 4. RE_ENTRY: Provides new entry price/range and SL for the same symbol (contains "re-entry", "re entry", or new entry levels as reply)
 5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result. Check for "move SL to entry" or "secure profits"
 6. CLOSE_SIGNAL: Explicitly says to close a position (e.g., "close gold", "exit trade", "close all")
-7. NOT_TRADING: Advertisements, announcements, greetings, or non-trading content
+7. COMPOUND_ACTION: Contains MULTIPLE distinct actions in ONE message (e.g., "Add Sell-Limit..." AND "Update SL to..."). Use this when a message contains BOTH a new pending order AND a modification to an existing position.
+8. NOT_TRADING: Advertisements, announcements, greetings, or non-trading content
+
+For COMPOUND_ACTION, return an "actions" array with each action separately identified.
+
+ORDER TYPE RULES (CRITICAL):
+- "buy" or "sell" = MARKET orders (execute immediately at current price). Use these for signals like "BUY GOLD @", "SELL XAUUSD @", etc. The entry price in these signals is just a reference zone, NOT a pending order trigger.
+- "buy_limit", "sell_limit", "buy_stop", "sell_stop" = PENDING orders. ONLY use these if the message EXPLICITLY contains the words "limit" or "stop" (e.g., "Buy Limit", "Sell-Limit", "buy stop", "SELL STOP").
+- If the message says "BUY @ 4340" or "SELL @ 4340" WITHOUT the word "limit" or "stop", use "buy" or "sell" (market order).
 
 Return JSON:
 {{
-    "message_type": "new_signal_complete|new_signal_incomplete|modification|re_entry|profit_notification|close_signal|not_trading",
+    "message_type": "new_signal_complete|new_signal_incomplete|modification|re_entry|profit_notification|close_signal|compound_action|not_trading",
     "symbol": "XAUUSD" or null,
     "order_type": "buy|sell|buy_limit|sell_limit|buy_stop|sell_stop" or null,
     "entry_price": number or null,
@@ -56,8 +65,22 @@ Return JSON:
     "re_entry_price_max": number or null (for re-entry range like "4284-4286"),
     "move_sl_to_entry": true/false (from profit notification),
     "close_position": true/false,
+    "actions": [
+        {{
+            "action_type": "new_signal|modification",
+            "order_type": "buy_limit|sell_limit|buy_stop|sell_stop" or null,
+            "entry_price": number or null,
+            "entry_price_max": number or null,
+            "stop_loss": number or null,
+            "take_profits": [numbers] or [],
+            "new_stop_loss": number or null,
+            "new_take_profit": number or null
+        }}
+    ],
     "confidence": 0-1
 }}
+
+Note: The "actions" array is ONLY used for compound_action message_type. For other types, leave it empty [].
 
 Message:
 ```
@@ -160,6 +183,7 @@ Return ONLY valid JSON, no explanation."""
             new_take_profit=data.get("new_take_profit"),
             re_entry_price=data.get("re_entry_price"),
             re_entry_price_max=data.get("re_entry_price_max"),
+            actions=data.get("actions", []),
         )
 
     def _get_message_type(self, data: dict) -> MessageType:

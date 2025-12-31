@@ -373,6 +373,10 @@ class MT5Executor:
             if not self._reconnect():
                 return {"success": False, "error": "Connection lost and reconnect failed"}
 
+        # Check order first to get detailed validation
+        check_result = self._mt5.order_check(request)
+        print(f"    [DEBUG] order_check result: {check_result}")
+
         # Send the order
         result = self._mt5.order_send(request)
         print(f"    [DEBUG] order_send result: {result}")
@@ -428,16 +432,16 @@ class MT5Executor:
             filling_mode = self._mt5.ORDER_FILLING_RETURN
 
         request: dict = {
-            "action": self._mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": lots,
-            "type": self._mt5.ORDER_TYPE_BUY if signal.order_type == OrderType.BUY else self._mt5.ORDER_TYPE_SELL,
-            "price": tick.ask if is_buy else tick.bid,
+            "action": int(self._mt5.TRADE_ACTION_DEAL),
+            "symbol": str(symbol),
+            "volume": float(lots),
+            "type": int(self._mt5.ORDER_TYPE_BUY if signal.order_type == OrderType.BUY else self._mt5.ORDER_TYPE_SELL),
+            "price": float(tick.ask if is_buy else tick.bid),
             "deviation": 20,
             "magic": 123456,
             "comment": "TG Signal Bot",
-            "type_time": self._mt5.ORDER_TIME_GTC,
-            "type_filling": filling_mode,
+            "type_time": int(self._mt5.ORDER_TIME_GTC),
+            "type_filling": int(filling_mode),
         }
 
         # Add SL/TP (ensure floats and normalize to symbol digits)
@@ -445,8 +449,8 @@ class MT5Executor:
         if signal.stop_loss:
             request["sl"] = round(float(signal.stop_loss), digits)
         if signal.take_profits:
-            # Use the most profitable TP: lowest for SELL, highest for BUY
-            best_tp = min(signal.take_profits) if not is_buy else max(signal.take_profits)
+            # Use the least profitable (closest) TP: highest for SELL, lowest for BUY
+            best_tp = max(signal.take_profits) if not is_buy else min(signal.take_profits)
             request["tp"] = round(float(best_tp), digits)
 
         # Handle pending orders
@@ -456,8 +460,11 @@ class MT5Executor:
             OrderType.BUY_STOP,
             OrderType.SELL_STOP,
         ]:
-            request["action"] = self._mt5.TRADE_ACTION_PENDING
-            request["price"] = signal.entry_price
+            request["action"] = int(self._mt5.TRADE_ACTION_PENDING)
+
+            # Ensure entry price is properly rounded to symbol digits
+            entry_price = float(signal.entry_price) if signal.entry_price else float(tick.ask if is_buy else tick.bid)
+            request["price"] = float(round(entry_price, digits))
 
             type_map = {
                 OrderType.BUY_LIMIT: self._mt5.ORDER_TYPE_BUY_LIMIT,
@@ -465,7 +472,13 @@ class MT5Executor:
                 OrderType.BUY_STOP: self._mt5.ORDER_TYPE_BUY_STOP,
                 OrderType.SELL_STOP: self._mt5.ORDER_TYPE_SELL_STOP,
             }
-            request["type"] = type_map[signal.order_type]
+            request["type"] = int(type_map[signal.order_type])
+
+            # Remove deviation for pending orders (not applicable)
+            request.pop("deviation", None)
+
+            # Use RETURN filling mode for pending orders (most compatible)
+            request["type_filling"] = int(self._mt5.ORDER_FILLING_RETURN)
 
         return request
 
@@ -673,3 +686,102 @@ class MT5Executor:
         if tick is None:
             return None
         return tick.ask if for_buy else tick.bid
+
+    @with_reconnect
+    def get_pending_orders(self, symbol: str | None = None) -> list[dict]:
+        """Get pending orders, optionally filtered by symbol.
+
+        Auto-reconnects if connection is lost.
+
+        Args:
+            symbol: Optional symbol to filter by
+
+        Returns:
+            List of pending order dicts
+        """
+        if not self._mt5:
+            return []
+
+        if symbol:
+            orders = self._mt5.orders_get(symbol=symbol)
+        else:
+            orders = self._mt5.orders_get()
+
+        if not orders:
+            return []
+
+        return [
+            {
+                "ticket": order.ticket,
+                "symbol": order.symbol,
+                "type": order.type,
+                "volume": order.volume_current,
+                "price_open": order.price_open,
+                "sl": order.sl,
+                "tp": order.tp,
+                "comment": order.comment,
+            }
+            for order in orders
+        ]
+
+    @with_reconnect
+    def get_pending_order(self, ticket: int) -> dict | None:
+        """Get pending order details by ticket number.
+
+        Auto-reconnects if connection is lost.
+
+        Args:
+            ticket: The MT5 order ticket
+
+        Returns:
+            Order dict or None if not found
+        """
+        if not self._mt5:
+            return None
+
+        orders = self._mt5.orders_get(ticket=ticket)
+        if orders and len(orders) > 0:
+            order = orders[0]
+            return {
+                "ticket": order.ticket,
+                "symbol": order.symbol,
+                "type": order.type,
+                "volume": order.volume_current,
+                "price_open": order.price_open,
+                "sl": order.sl,
+                "tp": order.tp,
+                "comment": order.comment,
+            }
+        return None
+
+    @with_reconnect
+    def cancel_pending_order(self, ticket: int) -> dict:
+        """Cancel a pending order by ticket.
+
+        Auto-reconnects if connection is lost.
+
+        Args:
+            ticket: The MT5 order ticket
+
+        Returns:
+            Result dict with 'success' key
+        """
+        if not self.connected or not self._mt5:
+            return {"success": False, "error": "Not connected to MT5"}
+
+        # Verify order exists
+        order = self.get_pending_order(ticket)
+        if not order:
+            return {"success": False, "error": f"Pending order {ticket} not found"}
+
+        request = {
+            "action": self._mt5.TRADE_ACTION_REMOVE,
+            "order": ticket,
+        }
+
+        result = self._mt5.order_send(request)
+        if result is None or result.retcode != self._mt5.TRADE_RETCODE_DONE:
+            error_msg = result.comment if result else "Cancel failed"
+            return {"success": False, "error": error_msg, "retcode": getattr(result, "retcode", None)}
+
+        return {"success": True, "ticket": ticket}
