@@ -35,3 +35,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 telegram_messages.log
+
+# Ruff cache
+.ruff_cache/
+
+# Application state
+bot_state.json
