@@ -182,6 +182,14 @@ class TelegramMT5Bot:
         broker_symbol = self._config.symbols.get_broker_symbol(signal.symbol)
         print(f"  Broker symbol: {broker_symbol}")
 
+        # Check if there's a pending position for this symbol that needs completion
+        pending_pos = self.state.get_pending_position_by_symbol(broker_symbol)
+        if pending_pos and is_complete:
+            print(f"  Found pending position {pending_pos.mt5_ticket} for {broker_symbol}")
+            print("  Completing pending position instead of opening new trade...")
+            await self._complete_pending_position(pending_pos, signal)
+            return
+
         # Calculate default SL if incomplete
         if not is_complete and signal.stop_loss is None:
             signal.stop_loss = self._calculate_default_sl(broker_symbol, signal)
@@ -223,6 +231,34 @@ class TelegramMT5Bot:
             print("Started 2-minute timeout for incomplete signal")
 
         self._record_trade(signal, result)
+
+    async def _complete_pending_position(
+        self,
+        pending_pos: TrackedPosition,
+        signal: TradeSignal,
+    ) -> None:
+        """Complete a pending position with SL/TP from new complete signal."""
+        # Cancel the timeout
+        self._cancel_timeout(pending_pos.telegram_msg_id)
+
+        # Determine new SL/TP values
+        new_sl = signal.stop_loss or pending_pos.stop_loss
+        new_tp = signal.take_profits[0] if signal.take_profits else None
+
+        result = self.executor.modify_position(pending_pos.mt5_ticket, sl=new_sl, tp=new_tp)
+
+        if result["success"]:
+            pending_pos.stop_loss = new_sl
+            pending_pos.take_profits = signal.take_profits
+            pending_pos.is_complete = True
+            pending_pos.status = PositionStatus.OPEN
+            self.state.save()
+            print(f"\nPosition {pending_pos.mt5_ticket} completed successfully!")
+            print(f"  SL: {new_sl}")
+            print(f"  TP: {new_tp}")
+            print(f"  TPs: {signal.take_profits}")
+        else:
+            print(f"\nFailed to complete position: {result['error']}")
 
     def _calculate_default_sl(self, broker_symbol: str, signal: TradeSignal) -> float | None:
         """Calculate default SL based on risk settings."""

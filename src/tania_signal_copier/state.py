@@ -74,6 +74,32 @@ class BotState:
             return self.positions.get(msg_id)
         return None
 
+    def get_pending_position_by_symbol(self, symbol: str) -> TrackedPosition | None:
+        """Get pending (incomplete) position by symbol.
+
+        Finds the most recent position that is still pending completion
+        for the given symbol.
+
+        Args:
+            symbol: The trading symbol (e.g., "XAUUSD")
+
+        Returns:
+            TrackedPosition if found, None otherwise
+        """
+        from tania_signal_copier.models import PositionStatus
+
+        pending_positions = [
+            pos
+            for pos in self.positions.values()
+            if pos.symbol == symbol and pos.status == PositionStatus.PENDING_COMPLETION
+        ]
+
+        if not pending_positions:
+            return None
+
+        # Return the most recent pending position
+        return max(pending_positions, key=lambda p: p.opened_at)
+
     def remove_position(self, msg_id: int) -> None:
         """Remove a position from tracking.
 
