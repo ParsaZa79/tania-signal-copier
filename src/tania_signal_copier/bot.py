@@ -77,8 +77,18 @@ class TelegramMT5Bot:
         # Trade log for history
         self.trade_log: list[dict] = []
 
+        # Reconnection settings
+        self._max_reconnect_attempts = 0  # 0 = infinite
+        self._reconnect_delay = 10  # seconds between attempts
+        self._max_reconnect_delay = 300  # max 5 minutes
+        self._shutdown_requested = False
+        self._handle_telegram_event: events.NewMessage | None = None
+
     async def start(self) -> None:
-        """Start the bot and begin monitoring the Telegram channel."""
+        """Start the bot and begin monitoring the Telegram channel.
+
+        Implements automatic reconnection with exponential backoff for network failures.
+        """
         print("Starting Telegram MT5 Signal Bot...")
 
         # Load saved state
@@ -90,26 +100,82 @@ class TelegramMT5Bot:
             print("Failed to connect to MT5. Exiting.")
             return
 
-        # Connect to Telegram
-        await self._telegram.start()  # type: ignore[misc]
-        print("Connected to Telegram")
+        # Run with reconnection loop
+        await self._run_with_reconnection()
 
-        # Get the channel entity
-        try:
-            channel = await self._telegram.get_entity(self._config.telegram.channel)
-            channel_name = getattr(channel, "title", self._config.telegram.channel)
-            print(f"Monitoring channel: {channel_name}")
-        except Exception as e:
-            print(f"Could not find channel: {e}")
-            return
+    async def _run_with_reconnection(self) -> None:
+        """Main loop with automatic reconnection on network failures."""
+        attempt = 0
+        current_delay = self._reconnect_delay
 
-        # Register message handler
-        @self._telegram.on(events.NewMessage(chats=channel))
-        async def handle_new_message(event: events.NewMessage.Event) -> None:
-            await self._process_message(event)
+        while not self._shutdown_requested:
+            try:
+                # Connect to Telegram
+                await self._telegram.connect()
 
-        print("Bot is running! Waiting for signals...")
-        await self._telegram.run_until_disconnected()  # type: ignore[misc]
+                if not await self._telegram.is_user_authorized():
+                    await self._telegram.start()  # type: ignore[misc]
+
+                print("Connected to Telegram")
+
+                # Reset reconnection state on successful connection
+                attempt = 0
+                current_delay = self._reconnect_delay
+
+                # Get the channel entity
+                channel = await self._telegram.get_entity(self._config.telegram.channel)
+                channel_name = getattr(channel, "title", self._config.telegram.channel)
+                print(f"Monitoring channel: {channel_name}")
+
+                # Register message handler (remove old handlers first to avoid duplicates)
+                if self._handle_telegram_event is not None:
+                    self._telegram.remove_event_handler(self._handle_telegram_event)
+
+                @self._telegram.on(events.NewMessage(chats=channel))
+                async def handle_new_message(event: events.NewMessage.Event) -> None:
+                    await self._process_message(event)
+
+                # Store reference for cleanup
+                self._handle_telegram_event = handle_new_message
+
+                print("Bot is running! Waiting for signals...")
+                await self._telegram.run_until_disconnected()  # type: ignore[misc]
+
+                # If we get here, connection was lost
+                if self._shutdown_requested:
+                    break
+
+                print("\nTelegram connection lost!")
+
+            except (OSError, ConnectionError) as e:
+                print(f"\nConnection error: {e}")
+
+            except Exception as e:
+                print(f"\nUnexpected error: {type(e).__name__}: {e}")
+
+            # Check if we should retry
+            if self._shutdown_requested:
+                break
+
+            attempt += 1
+            if self._max_reconnect_attempts > 0 and attempt >= self._max_reconnect_attempts:
+                print(f"\nMax reconnection attempts ({self._max_reconnect_attempts}) reached. Exiting.")
+                break
+
+            # Wait before reconnecting with exponential backoff
+            print(f"Reconnecting in {current_delay} seconds... (attempt {attempt})")
+            await asyncio.sleep(current_delay)
+
+            # Exponential backoff with cap
+            current_delay = min(current_delay * 2, self._max_reconnect_delay)
+
+            # Ensure MT5 is still connected
+            if not self.executor.is_alive():
+                print("MT5 connection lost, reconnecting...")
+                if not self.executor._reconnect():
+                    print("Failed to reconnect to MT5")
+
+        print("Reconnection loop ended.")
 
     async def _process_message(self, event: events.NewMessage.Event) -> None:
         """Process an incoming Telegram message.
@@ -670,10 +736,16 @@ class TelegramMT5Bot:
 
     def stop(self) -> None:
         """Stop the bot and cleanup resources."""
+        self._shutdown_requested = True
+
         # Cancel all pending timeouts
         for task in self._pending_timeouts.values():
             task.cancel()
         self._pending_timeouts.clear()
+
+        # Disconnect Telegram
+        if self._telegram.is_connected():
+            self._telegram.disconnect()
 
         self.state.save()
         self.executor.disconnect()

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tania-signal-copier.bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/parsaz/Documents/Dev/Projects/tania-signal-copier/run_bot.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/parsaz/Documents/Dev/Projects/tania-signal-copier</string>
+
+    <!-- Auto-restart settings -->
+    <key>KeepAlive</key>
+    <dict>
+        <!-- Restart if exits with non-zero code -->
+        <key>SuccessfulExit</key>
+        <false/>
+        <!-- Also restart if it crashes -->
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Throttle restarts: wait 30 seconds between restart attempts -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Start on load -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Log files -->
+    <key>StandardOutPath</key>
+    <string>/Users/parsaz/Documents/Dev/Projects/tania-signal-copier/logs/bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/parsaz/Documents/Dev/Projects/tania-signal-copier/logs/bot.error.log</string>
+
+    <!-- Prevent system sleep while running -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
