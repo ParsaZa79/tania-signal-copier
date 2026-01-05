@@ -7,9 +7,6 @@ set -e
 # Change to project directory
 cd "$(dirname "$0")"
 
-# Activate virtual environment
-source .venv/bin/activate
-
 # Load environment variables from .env file
 if [ -f .env ]; then
     export $(grep -v '^#' .env | xargs)
@@ -24,7 +21,7 @@ mkdir -p logs
 # -m: prevent disk sleep
 # -s: prevent system sleep
 echo "Starting bot at $(date)"
-echo "Using Python: $(which python)"
-caffeinate -dims python -m tania_signal_copier.bot
+echo "Using Python: $(uv run which python)"
+caffeinate -dims uv run python -m tania_signal_copier.bot
 
 echo "Bot exited at $(date)"

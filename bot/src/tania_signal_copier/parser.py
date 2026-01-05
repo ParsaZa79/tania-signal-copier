@@ -38,7 +38,7 @@ CLASSIFICATION RULES:
 2. NEW_SIGNAL_INCOMPLETE: Contains symbol + direction but MISSING one or more of: entry price, stop loss, take profit
 3. MODIFICATION: Updates SL/TP for an existing trade (often says "move SL to...", "update SL/TP", "new SL")
 4. RE_ENTRY: Provides new entry price/range and SL for the same symbol (contains "re-entry", "re entry", or new entry levels as reply)
-5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result. Check for "move SL to entry" or "secure profits"
+5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result. Extract which TP was hit (TP1=1, TP2=2, etc.) from patterns like "TP1 hit", "First target reached", "TP2 ✅", "Target 1 done", "Second TP hit". Also check for "move SL to entry" or "secure profits".
 6. CLOSE_SIGNAL: Explicitly says to close a position (e.g., "close gold", "exit trade", "close all")
 7. COMPOUND_ACTION: Contains MULTIPLE distinct actions in ONE message (e.g., "Add Sell-Limit..." AND "Update SL to..."). Use this when a message contains BOTH a new pending order AND a modification to an existing position.
 8. NOT_TRADING: Advertisements, announcements, greetings, or non-trading content
@@ -64,6 +64,7 @@ Return JSON:
     "re_entry_price": number or null (for re-entry signals),
     "re_entry_price_max": number or null (for re-entry range like "4284-4286"),
     "move_sl_to_entry": true/false (from profit notification),
+    "tp_hit_number": 1|2|3|...|null (which TP was hit, e.g., 1 for TP1, 2 for TP2),
     "close_position": true/false,
     "actions": [
         {{
@@ -124,6 +125,7 @@ Return ONLY valid JSON, no explanation."""
             The raw response text from Claude
         """
         options = ClaudeAgentOptions(
+            model="haiku", # Use Haiku model for the fastest response
             allowed_tools=[],  # No tools needed for parsing
             max_turns=1,  # Single turn for parsing
         )
@@ -178,6 +180,7 @@ Return ONLY valid JSON, no explanation."""
             message_type=msg_type,
             is_complete=is_complete,
             move_sl_to_entry=data.get("move_sl_to_entry", False),
+            tp_hit_number=data.get("tp_hit_number"),
             close_position=data.get("close_position", False),
             new_stop_loss=data.get("new_stop_loss"),
             new_take_profit=data.get("new_take_profit"),

@@ -449,8 +449,9 @@ class MT5Executor:
         if signal.stop_loss:
             request["sl"] = round(float(signal.stop_loss), digits)
         if signal.take_profits:
-            # Use the least profitable (closest) TP: highest for SELL, lowest for BUY
-            best_tp = max(signal.take_profits) if not is_buy else min(signal.take_profits)
+            # Use the furthest (most profitable) TP so intermediate TPs trigger notifications
+            # For BUY: highest TP, For SELL: lowest TP
+            best_tp = max(signal.take_profits) if is_buy else min(signal.take_profits)
             request["tp"] = round(float(best_tp), digits)
 
         # Handle pending orders

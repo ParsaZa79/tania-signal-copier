@@ -67,6 +67,7 @@ class TradeSignal:
 
     # Modification fields
     move_sl_to_entry: bool = False
+    tp_hit_number: int | None = None  # Which TP was hit (1, 2, 3, etc.)
     close_position: bool = False
     new_stop_loss: float | None = None
     new_take_profit: float | None = None
@@ -98,6 +99,7 @@ class TrackedPosition:
     opened_at: datetime
     is_complete: bool
     status: PositionStatus
+    tps_hit: list[int] = field(default_factory=list)  # TP numbers already hit
 
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON storage."""
@@ -113,6 +115,7 @@ class TrackedPosition:
             "opened_at": self.opened_at.isoformat(),
             "is_complete": self.is_complete,
             "status": self.status.value,
+            "tps_hit": self.tps_hit,
         }
 
     @classmethod
@@ -130,4 +133,5 @@ class TrackedPosition:
             opened_at=datetime.fromisoformat(data["opened_at"]),
             is_complete=data["is_complete"],
             status=PositionStatus(data["status"]),
+            tps_hit=data.get("tps_hit", []),
         )

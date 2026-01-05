@@ -290,6 +290,7 @@ class TelegramMT5Bot:
             opened_at=datetime.now(),
             is_complete=is_complete,
             status=status,
+            tps_hit=[],
         )
         self.state.add_position(tracked)
         self.state.save()
@@ -361,23 +362,98 @@ class TelegramMT5Bot:
             print(f"  Full result: {result}")
 
     def _get_best_tp(self, take_profits: list[float], order_type: OrderType) -> float | None:
-        """Get the least profitable (closest) TP based on order direction.
+        """Get the furthest (most profitable) TP based on order direction.
 
-        For SELL: highest TP (closest to entry = less profit)
-        For BUY: lowest TP (closest to entry = less profit)
+        Sets the final TP on MT5 so that intermediate TPs can trigger
+        profit notifications for progressive SL movement.
+
+        For BUY: highest TP (furthest from entry = most profit)
+        For SELL: lowest TP (furthest from entry = most profit)
 
         Args:
             take_profits: List of take profit prices
             order_type: The order direction (BUY/SELL)
 
         Returns:
-            The least profitable TP, or None if no TPs
+            The most profitable TP, or None if no TPs
         """
         if not take_profits:
             return None
 
         is_sell = order_type in [OrderType.SELL, OrderType.SELL_LIMIT, OrderType.SELL_STOP]
-        return max(take_profits) if is_sell else min(take_profits)
+        return min(take_profits) if is_sell else max(take_profits)
+
+    def _determine_tp_hit(
+        self,
+        signal: TradeSignal,
+        pos: TrackedPosition,
+    ) -> int | None:
+        """Determine which TP number was hit from signal and position context.
+
+        Args:
+            signal: The parsed profit notification signal
+            pos: The tracked position
+
+        Returns:
+            TP number (1, 2, 3, etc.) or None if cannot be determined
+        """
+        # First: Check if parser extracted TP number
+        if signal.tp_hit_number is not None:
+            return signal.tp_hit_number
+
+        # Second: If move_sl_to_entry is True and no TP specified, assume TP1
+        if signal.move_sl_to_entry:
+            return 1
+
+        # Third: Infer from TPs already hit (next in sequence)
+        if pos.tps_hit:
+            return max(pos.tps_hit) + 1
+        else:
+            return 1  # First TP if nothing hit yet
+
+    def _calculate_progressive_sl(
+        self,
+        tp_number: int,
+        pos: TrackedPosition,
+    ) -> float | None:
+        """Calculate new SL level based on which TP was hit.
+
+        Progressive SL rules:
+        - TP1 hit -> SL moves to Entry
+        - TP2 hit -> SL moves to TP1
+        - TP3 hit -> SL moves to TP2
+        - etc.
+
+        Args:
+            tp_number: Which TP was hit (1, 2, 3, etc.)
+            pos: The tracked position with entry and TP levels
+
+        Returns:
+            New SL price or None if cannot calculate
+        """
+        if tp_number == 1:
+            # TP1 hit -> move to entry
+            return pos.entry_price
+
+        # For TP2+, move to the previous TP level
+        # TPs are stored as a list - need to get the correct one
+        previous_tp_index = tp_number - 2  # TP2 -> index 0 (TP1), TP3 -> index 1 (TP2)
+
+        if not pos.take_profits:
+            print(f"No take_profits stored for position {pos.mt5_ticket}")
+            return pos.entry_price  # Fallback to entry
+
+        # Sort TPs correctly based on order direction
+        is_buy = pos.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
+        sorted_tps = sorted(pos.take_profits, reverse=not is_buy)
+        # For BUY: ascending (TP1 < TP2 < TP3)
+        # For SELL: descending (TP1 > TP2 > TP3)
+
+        if previous_tp_index < 0 or previous_tp_index >= len(sorted_tps):
+            print(f"TP{tp_number - 1} not found in position (only {len(sorted_tps)} TPs)")
+            return pos.entry_price  # Fallback to entry if TP not found
+
+        return sorted_tps[previous_tp_index]
 
     def _calculate_default_sl(self, broker_symbol: str, signal: TradeSignal) -> float | None:
         """Calculate default SL based on risk settings."""
@@ -506,12 +582,15 @@ class TelegramMT5Bot:
         target_msg_id: int | None,
         signal: TradeSignal,
     ) -> None:
-        """Handle TP hit / profit notification."""
-        print("Profit notification received")
+        """Handle TP hit / profit notification with progressive SL movement.
 
-        if not signal.move_sl_to_entry:
-            print("No action required (move_sl_to_entry not specified)")
-            return
+        Progressive SL rules:
+        - TP1 hit -> SL moves to Entry
+        - TP2 hit -> SL moves to TP1
+        - TP3 hit -> SL moves to TP2
+        - etc.
+        """
+        print("Profit notification received")
 
         if target_msg_id is None:
             print("No target position found")
@@ -522,14 +601,45 @@ class TelegramMT5Bot:
             print("Target position not found or closed")
             return
 
-        # Move SL to entry
-        result = self.executor.modify_position(pos.mt5_ticket, sl=pos.entry_price)
+        # Determine which TP was hit
+        tp_number = self._determine_tp_hit(signal, pos)
+        if tp_number is None:
+            print("Could not determine which TP was hit, no action taken")
+            return
+
+        print(f"  TP{tp_number} hit detected")
+
+        # Check if this TP was already processed
+        if tp_number in pos.tps_hit:
+            print(f"  TP{tp_number} already processed, skipping")
+            return
+
+        # Calculate new SL based on TP hit
+        new_sl = self._calculate_progressive_sl(tp_number, pos)
+        if new_sl is None:
+            print(f"  Could not calculate new SL for TP{tp_number}")
+            return
+
+        # Only modify if new SL is better (more protective)
+        current_sl = pos.stop_loss
+        if current_sl is not None:
+            is_buy = pos.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
+            if is_buy and new_sl <= current_sl:
+                print(f"  New SL {new_sl} is not better than current {current_sl} for BUY, skipping")
+                return
+            if not is_buy and new_sl >= current_sl:
+                print(f"  New SL {new_sl} is not better than current {current_sl} for SELL, skipping")
+                return
+
+        # Move SL
+        result = self.executor.modify_position(pos.mt5_ticket, sl=new_sl)
         if result["success"]:
-            pos.stop_loss = pos.entry_price
+            pos.stop_loss = new_sl
+            pos.tps_hit.append(tp_number)
             self.state.save()
-            print(f"Moved SL to entry ({pos.entry_price}) for position {pos.mt5_ticket}")
+            print(f"  TP{tp_number} hit: Moved SL to {new_sl} for position {pos.mt5_ticket}")
         else:
-            print(f"Failed to move SL to entry: {result['error']}")
+            print(f"  Failed to move SL: {result['error']}")
 
     async def _handle_close_signal(
         self,
