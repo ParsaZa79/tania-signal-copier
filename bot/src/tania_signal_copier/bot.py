@@ -338,6 +338,38 @@ class TelegramMT5Bot:
 
         print(f"  Position verified on MT5: {mt5_pos['symbol']} @ {mt5_pos['price_open']}")
 
+        # Validate SL/TP relative to actual entry price
+        actual_entry = mt5_pos['price_open']
+        is_buy = mt5_pos['type'] == 0  # MT5 type 0 = BUY
+
+        # Validate and fix TP if it's on the wrong side of entry
+        if new_tp is not None:
+            if is_buy and new_tp <= actual_entry:
+                print(f"\nWARNING: Invalid TP {new_tp} for BUY @ {actual_entry} (TP must be above entry)")
+                print("  Signal prices may be stale or corrupted - skipping TP update")
+                new_tp = None  # Don't set invalid TP
+            elif not is_buy and new_tp >= actual_entry:
+                print(f"\nWARNING: Invalid TP {new_tp} for SELL @ {actual_entry} (TP must be below entry)")
+                print("  Signal prices may be stale or corrupted - skipping TP update")
+                new_tp = None
+
+        # Validate and fix SL if it's on the wrong side of entry
+        if new_sl is not None:
+            if is_buy and new_sl >= actual_entry:
+                print(f"\nWARNING: Invalid SL {new_sl} for BUY @ {actual_entry} (SL must be below entry)")
+                print("  Signal prices may be stale or corrupted - skipping SL update")
+                new_sl = None
+            elif not is_buy and new_sl <= actual_entry:
+                print(f"\nWARNING: Invalid SL {new_sl} for SELL @ {actual_entry} (SL must be above entry)")
+                print("  Signal prices may be stale or corrupted - skipping SL update")
+                new_sl = None
+
+        # If both SL and TP are invalid, we can't complete the position properly
+        if new_sl is None and new_tp is None:
+            print("\nERROR: Both SL and TP are invalid - cannot complete position")
+            print("  Keeping existing position SL/TP unchanged")
+            return
+
         result = self.executor.modify_position(pending_pos.mt5_ticket, sl=new_sl, tp=new_tp)
 
         if result["success"]:

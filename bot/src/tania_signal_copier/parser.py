@@ -38,7 +38,9 @@ CLASSIFICATION RULES:
 2. NEW_SIGNAL_INCOMPLETE: Contains symbol + direction but MISSING one or more of: entry price, stop loss, take profit
 3. MODIFICATION: Updates SL/TP for an existing trade (often says "move SL to...", "update SL/TP", "new SL")
 4. RE_ENTRY: Provides new entry price/range and SL for the same symbol (contains "re-entry", "re entry", or new entry levels as reply)
-5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result. Extract which TP was hit (TP1=1, TP2=2, etc.) from patterns like "TP1 hit", "First target reached", "TP2 ✅", "Target 1 done", "Second TP hit". Also check for "move SL to entry" or "secure profits".
+5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result. Extract which TP was hit (TP1=1, TP2=2, etc.) from patterns like "TP1 hit", "First target reached", "TP2 ✅", "Target 1 done", "Second TP hit".
+   - Set "move_sl_to_entry": true ONLY when a specific TP is CONFIRMED hit (e.g., "TP1 hit", "First target done") OR explicit instruction to move SL to entry/breakeven
+   - Set "move_sl_to_entry": false for vague messages like "Secure some profits", "Book profits", "We're +50 pips" - these are informational only, NOT instructions to move SL
 6. CLOSE_SIGNAL: Explicitly says to close a position (e.g., "close gold", "exit trade", "close all")
 7. COMPOUND_ACTION: Contains MULTIPLE distinct actions in ONE message (e.g., "Add Sell-Limit..." AND "Update SL to..."). Use this when a message contains BOTH a new pending order AND a modification to an existing position.
 8. NOT_TRADING: Advertisements, announcements, greetings, or non-trading content
@@ -97,6 +99,28 @@ Return ONLY valid JSON, no explanation."""
         """
         pass
 
+    def _strip_markdown(self, text: str) -> str:
+        """Strip Telegram markdown formatting from text.
+
+        Removes bold (**), italic (__), strikethrough (~~), and code (`) markers
+        that can corrupt number parsing.
+
+        Args:
+            text: Raw text potentially containing markdown
+
+        Returns:
+            Cleaned text with markdown markers removed
+        """
+        # Remove bold markers **text**
+        cleaned = re.sub(r"\*\*", "", text)
+        # Remove italic markers __text__
+        cleaned = re.sub(r"__", "", cleaned)
+        # Remove strikethrough ~~text~~
+        cleaned = re.sub(r"~~", "", cleaned)
+        # Remove inline code `text`
+        cleaned = re.sub(r"`", "", cleaned)
+        return cleaned
+
     async def parse_signal(self, message: str) -> TradeSignal | None:
         """Parse a Telegram message into a structured trade signal.
 
@@ -106,7 +130,9 @@ Return ONLY valid JSON, no explanation."""
         Returns:
             TradeSignal if successfully parsed, None for non-trading messages
         """
-        prompt = self.PARSER_PROMPT.format(message=message)
+        # Strip markdown formatting that can corrupt number parsing
+        cleaned_message = self._strip_markdown(message)
+        prompt = self.PARSER_PROMPT.format(message=cleaned_message)
 
         try:
             response_text = await self._query_claude(prompt)
