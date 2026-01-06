@@ -125,7 +125,7 @@ Return ONLY valid JSON, no explanation."""
             The raw response text from Claude
         """
         options = ClaudeAgentOptions(
-            model="haiku", # Use Haiku model for the fastest response
+            model="opus", # Use Haiku model for the fastest response
             allowed_tools=[],  # No tools needed for parsing
             max_turns=1,  # Single turn for parsing
         )
