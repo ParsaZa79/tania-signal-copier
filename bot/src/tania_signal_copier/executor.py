@@ -399,9 +399,39 @@ class MT5Executor:
                 "retcode": result.retcode,
             }
 
+        # Verify SL/TP were set correctly - some brokers/libraries may fail to set them
+        ticket = result.order
+        expected_sl = request.get("sl")
+        expected_tp = request.get("tp")
+
+        if expected_sl or expected_tp:
+            pos = self.get_position(ticket)
+            if pos:
+                actual_sl = pos.get("sl", 0)
+                actual_tp = pos.get("tp", 0)
+                sl_mismatch = expected_sl and abs(actual_sl - expected_sl) > 0.01
+                tp_mismatch = expected_tp and abs(actual_tp - expected_tp) > 0.01
+
+                if sl_mismatch or tp_mismatch:
+                    print("    [WARNING] SL/TP mismatch after execution!")
+                    print(f"    [WARNING] Expected SL={expected_sl}, TP={expected_tp}")
+                    print(f"    [WARNING] Actual SL={actual_sl}, TP={actual_tp}")
+                    print("    [WARNING] Attempting to fix via modify_position...")
+
+                    # Try to set the correct SL/TP
+                    fix_result = self.modify_position(
+                        ticket,
+                        sl=expected_sl if sl_mismatch else None,
+                        tp=expected_tp if tp_mismatch else None,
+                    )
+                    if fix_result["success"]:
+                        print("    [WARNING] SL/TP corrected successfully")
+                    else:
+                        print(f"    [ERROR] Failed to correct SL/TP: {fix_result['error']}")
+
         return {
             "success": True,
-            "ticket": result.order,
+            "ticket": ticket,
             "volume": lots,
             "price": result.price,
             "symbol": symbol,

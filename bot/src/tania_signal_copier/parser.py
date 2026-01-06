@@ -38,9 +38,16 @@ CLASSIFICATION RULES:
 2. NEW_SIGNAL_INCOMPLETE: Contains symbol + direction but MISSING one or more of: entry price, stop loss, take profit
 3. MODIFICATION: Updates SL/TP for an existing trade (often says "move SL to...", "update SL/TP", "new SL")
 4. RE_ENTRY: Provides new entry price/range and SL for the same symbol (contains "re-entry", "re entry", or new entry levels as reply)
-5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result. Extract which TP was hit (TP1=1, TP2=2, etc.) from patterns like "TP1 hit", "First target reached", "TP2 ✅", "Target 1 done", "Second TP hit".
-   - Set "move_sl_to_entry": true ONLY when a specific TP is CONFIRMED hit (e.g., "TP1 hit", "First target done") OR explicit instruction to move SL to entry/breakeven
-   - Set "move_sl_to_entry": false for vague messages like "Secure some profits", "Book profits", "We're +50 pips" - these are informational only, NOT instructions to move SL
+5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result.
+   CRITICAL - "move_sl_to_entry" and "tp_hit_number" rules:
+   - "tp_hit_number": ONLY set if message EXPLICITLY confirms a TP was hit (e.g., "TP1 hit", "First target reached", "TP2 ✅", "Target 1 done"). Otherwise null.
+   - "move_sl_to_entry": true ONLY if:
+     (a) A specific TP is CONFIRMED hit in the message, OR
+     (b) Explicit instruction like "move SL to entry", "SL to breakeven", "secure at entry"
+   - "move_sl_to_entry": false for:
+     (a) "Book some profits", "Secure profits", "Take some profits" - these are SUGGESTIONS to manually close partial, NOT instructions to move SL
+     (b) Pips running messages like "+50 pips", "35 pips profit running" - just informational
+     (c) Any message that does NOT explicitly confirm a TP hit or say "move SL"
 6. CLOSE_SIGNAL: Explicitly says to close a position (e.g., "close gold", "exit trade", "close all")
 7. COMPOUND_ACTION: Contains MULTIPLE distinct actions in ONE message (e.g., "Add Sell-Limit..." AND "Update SL to..."). Use this when a message contains BOTH a new pending order AND a modification to an existing position.
 8. NOT_TRADING: Advertisements, announcements, greetings, or non-trading content

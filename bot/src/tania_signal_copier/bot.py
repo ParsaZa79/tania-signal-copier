@@ -427,21 +427,25 @@ class TelegramMT5Bot:
             pos: The tracked position
 
         Returns:
-            TP number (1, 2, 3, etc.) or None if cannot be determined
+            TP number (1, 2, 3, etc.) or None if cannot be determined.
+            Returns None for informational messages that don't confirm a TP hit.
         """
-        # First: Check if parser extracted TP number
+        # Only act if parser explicitly detected a TP hit number
         if signal.tp_hit_number is not None:
             return signal.tp_hit_number
 
-        # Second: If move_sl_to_entry is True and no TP specified, assume TP1
+        # Only act if parser explicitly detected instruction to move SL to entry
+        # (e.g., "move SL to entry", "breakeven", NOT "book profits")
         if signal.move_sl_to_entry:
-            return 1
+            # If we already have TPs hit, move to next level
+            if pos.tps_hit:
+                return max(pos.tps_hit) + 1
+            else:
+                return 1  # Assume TP1 if explicit move_sl_to_entry instruction
 
-        # Third: Infer from TPs already hit (next in sequence)
-        if pos.tps_hit:
-            return max(pos.tps_hit) + 1
-        else:
-            return 1  # First TP if nothing hit yet
+        # If neither tp_hit_number nor move_sl_to_entry is set,
+        # this is just an informational message - don't move SL
+        return None
 
     def _calculate_progressive_sl(
         self,
