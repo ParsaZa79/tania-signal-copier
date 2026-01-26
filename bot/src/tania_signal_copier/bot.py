@@ -17,21 +17,27 @@ Requirements:
 """
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 
 from telethon import TelegramClient, events
 
 from tania_signal_copier.config import BotConfig, config
 from tania_signal_copier.executor import MT5Executor
 from tania_signal_copier.models import (
+    DualPosition,
     MessageType,
     OrderType,
     PositionStatus,
     TrackedPosition,
+    TradeActionType,
+    TradeRole,
     TradeSignal,
 )
 from tania_signal_copier.parser import SignalParser
 from tania_signal_copier.state import BotState
+from tania_signal_copier.strategy import TradingStrategy, get_strategy
 
 
 class TelegramMT5Bot:
@@ -42,11 +48,13 @@ class TelegramMT5Bot:
     - SignalParser for AI-powered message classification
     - MT5Executor for trade execution
     - BotState for position tracking
+    - TradingStrategy for dual-trade or single-trade mode
 
     Attributes:
         parser: The signal parser instance
         executor: The MT5 executor instance
         state: The persistent state manager
+        strategy: The trading strategy (dual_tp or single)
     """
 
     def __init__(self, bot_config: BotConfig | None = None) -> None:
@@ -64,6 +72,8 @@ class TelegramMT5Bot:
             server=self._config.mt5.server,
         )
         self.state = BotState(state_file=self._config.state_file)
+        self.strategy: TradingStrategy = get_strategy(self._config.trading.strategy_type)
+        print(f"Using trading strategy: {self._config.trading.strategy_type}")
 
         self._telegram = TelegramClient(
             self._config.telegram.session_name,
@@ -73,6 +83,8 @@ class TelegramMT5Bot:
 
         # Timeout management
         self._pending_timeouts: dict[int, asyncio.Task] = {}
+        # TP verification uses (msg_id, ticket) tuples as keys
+        self._tp_verification_timeouts: dict[tuple[int, int], asyncio.Task] = {}
 
         # Trade log for history
         self.trade_log: list[dict] = []
@@ -82,7 +94,8 @@ class TelegramMT5Bot:
         self._reconnect_delay = 10  # seconds between attempts
         self._max_reconnect_delay = 300  # max 5 minutes
         self._shutdown_requested = False
-        self._handle_telegram_event: events.NewMessage | None = None
+        self._handle_telegram_event: Callable[..., Any] | None = None
+        self._handle_edit_event: Callable[..., Any] | None = None
 
     async def start(self) -> None:
         """Start the bot and begin monitoring the Telegram channel.
@@ -127,16 +140,23 @@ class TelegramMT5Bot:
                 channel_name = getattr(channel, "title", self._config.telegram.channel)
                 print(f"Monitoring channel: {channel_name}")
 
-                # Register message handler (remove old handlers first to avoid duplicates)
+                # Register message handlers (remove old handlers first to avoid duplicates)
                 if self._handle_telegram_event is not None:
                     self._telegram.remove_event_handler(self._handle_telegram_event)
+                if self._handle_edit_event is not None:
+                    self._telegram.remove_event_handler(self._handle_edit_event)
 
                 @self._telegram.on(events.NewMessage(chats=channel))
                 async def handle_new_message(event: events.NewMessage.Event) -> None:
                     await self._process_message(event)
 
-                # Store reference for cleanup
+                @self._telegram.on(events.MessageEdited(chats=channel))
+                async def handle_edited_message(event: events.MessageEdited.Event) -> None:
+                    await self._process_edited_message(event)
+
+                # Store references for cleanup
                 self._handle_telegram_event = handle_new_message
+                self._handle_edit_event = handle_edited_message
 
                 print("Bot is running! Waiting for signals...")
                 await self._telegram.run_until_disconnected()  # type: ignore[misc]
@@ -205,6 +225,154 @@ class TelegramMT5Bot:
         # Route to appropriate handler
         await self._route_signal(msg_id, reply_to_msg_id, signal)
 
+    async def _process_edited_message(self, event: events.MessageEdited.Event) -> None:
+        """Process an edited Telegram message.
+
+        When a signal provider edits their original message (e.g., to fix a typo
+        in SL/TP values), this method detects the change and updates MT5 positions.
+
+        Safety checks:
+        1. Only process edits for messages we have tracked positions for
+        2. Only process if position is still open
+        3. Only process if edit is within the configured time window
+        """
+        msg = event.message
+        msg_id = msg.id
+        text = msg.text or ""
+
+        print(f"\n{'=' * 50}")
+        print(f"EDIT DETECTED - Message ID: {msg_id}")
+        print(f"New text: {text[:100]}...")
+
+        # Safety check 1: Do we have a position for this message?
+        dual = self.state.get_dual_position_by_msg_id(msg_id)
+        if dual is None:
+            print("No tracked position for this message, ignoring edit.")
+            return
+
+        # Safety check 2: Is position still open?
+        if dual.is_closed:
+            print("Position already closed, ignoring edit.")
+            return
+
+        # Safety check 3: Time window check
+        edit_window = self._config.trading.edit_window_seconds
+        oldest_position = min(p.opened_at for p in dual.all_positions)
+        time_since_open = (datetime.now() - oldest_position).total_seconds()
+
+        if time_since_open > edit_window:
+            print(
+                f"Edit received {time_since_open/60:.1f} min after open, "
+                f"exceeds {edit_window/60:.1f} min window. Ignoring."
+            )
+            return
+
+        # Re-parse the edited message
+        new_signal = await self.parser.parse_signal(text)
+        if new_signal is None:
+            print("Edited message is no longer a trading signal, ignoring.")
+            return
+
+        # Compare and apply changes
+        await self._apply_edit_changes(msg_id, dual, new_signal, text)
+
+    async def _apply_edit_changes(
+        self,
+        msg_id: int,
+        dual: DualPosition,
+        new_signal: TradeSignal,
+        edited_text: str,
+    ) -> None:
+        """Compare original signal with edited version and apply MT5 modifications.
+
+        Args:
+            msg_id: The Telegram message ID
+            dual: The DualPosition containing tracked positions
+            new_signal: The newly parsed signal from the edited message
+            edited_text: The edited message text (for storing as original)
+        """
+        # Get reference position for original values
+        ref_pos = dual.scalp or dual.runner
+        if ref_pos is None:
+            return
+
+        original_sl = ref_pos.original_stop_loss or ref_pos.stop_loss
+        original_tps = ref_pos.original_take_profits or ref_pos.take_profits
+
+        # Detect what changed
+        changes = []
+        new_sl = new_signal.stop_loss
+        new_tps = new_signal.take_profits
+
+        sl_changed = new_sl and original_sl and abs(new_sl - original_sl) > 0.01
+        tps_changed = new_tps != original_tps
+
+        if sl_changed:
+            changes.append(f"SL: {original_sl} -> {new_sl}")
+        if tps_changed:
+            changes.append(f"TPs: {original_tps} -> {new_tps}")
+
+        if not changes:
+            print("No significant changes detected in edit.")
+            return
+
+        print(f"Changes detected: {', '.join(changes)}")
+
+        # Apply modifications to all open positions
+        for pos in dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                continue
+
+            # Determine appropriate TP for this position's role
+            if pos.role == TradeRole.RUNNER and new_tps:
+                new_tp = new_tps[-1]  # Runner targets last TP
+            elif new_tps:
+                new_tp = new_tps[0]  # Scalp targets TP1
+            else:
+                new_tp = None
+
+            result = self.executor.modify_position(
+                pos.mt5_ticket,
+                sl=new_sl,
+                tp=new_tp,
+            )
+
+            if result["success"]:
+                # Update tracked position with new values
+                if new_sl:
+                    pos.stop_loss = new_sl
+                if new_tps:
+                    pos.take_profits = new_tps.copy()
+                # Update original values to the corrected ones
+                pos.original_message_text = edited_text
+                pos.original_stop_loss = new_sl
+                pos.original_take_profits = new_tps.copy() if new_tps else []
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Modified successfully")
+            else:
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Failed - {result.get('error', 'Unknown error')}")
+
+        self.state.save()
+        print("Edit changes applied and state saved.")
+
+    def _resolve_target_msg_id(self, reply_to_msg_id: int | None) -> int | None:
+        """Resolve the target message ID for position lookup.
+
+        If reply_to_msg_id points to a tracked position, use it.
+        Otherwise fall back to last_signal_msg_id (handles nested reply chains).
+
+        This fixes the case where a TP1 hit message replies to a "40+ pips" message
+        instead of the original signal - the reply chain is:
+        TP1 hit -> 40+ pips -> original signal
+        """
+        if reply_to_msg_id is not None:
+            # Check if this msg_id has a tracked position
+            if self.state.get_dual_position_by_msg_id(reply_to_msg_id) is not None:
+                return reply_to_msg_id
+            # reply_to_msg_id exists but not tracked - likely a nested reply
+            # Fall back to last signal
+            print(f"  reply_to {reply_to_msg_id} not tracked, using last_signal_msg_id")
+        return self.state.last_signal_msg_id
+
     async def _route_signal(
         self,
         msg_id: int,
@@ -212,24 +380,18 @@ class TelegramMT5Bot:
         signal: TradeSignal,
     ) -> None:
         """Route signal to the appropriate handler based on message type."""
+        # Resolve target for position-related actions
+        target_msg_id = self._resolve_target_msg_id(reply_to_msg_id)
+
         handlers = {
             MessageType.NEW_SIGNAL_COMPLETE: lambda: self._handle_new_signal(msg_id, signal, is_complete=True),
             MessageType.NEW_SIGNAL_INCOMPLETE: lambda: self._handle_new_signal(msg_id, signal, is_complete=False),
-            MessageType.MODIFICATION: lambda: self._handle_modification(
-                reply_to_msg_id or self.state.last_signal_msg_id, signal
-            ),
-            MessageType.RE_ENTRY: lambda: self._handle_re_entry(
-                msg_id, reply_to_msg_id or self.state.last_signal_msg_id, signal
-            ),
-            MessageType.PROFIT_NOTIFICATION: lambda: self._handle_profit_notification(
-                reply_to_msg_id or self.state.last_signal_msg_id, signal
-            ),
-            MessageType.CLOSE_SIGNAL: lambda: self._handle_close_signal(
-                reply_to_msg_id or self.state.last_signal_msg_id, signal
-            ),
-            MessageType.COMPOUND_ACTION: lambda: self._handle_compound_action(
-                msg_id, reply_to_msg_id or self.state.last_signal_msg_id, signal
-            ),
+            MessageType.MODIFICATION: lambda: self._handle_modification(target_msg_id, signal),
+            MessageType.RE_ENTRY: lambda: self._handle_re_entry(msg_id, target_msg_id, signal),
+            MessageType.PROFIT_NOTIFICATION: lambda: self._handle_profit_notification(target_msg_id, signal),
+            MessageType.CLOSE_SIGNAL: lambda: self._handle_close_signal(target_msg_id, signal),
+            MessageType.PARTIAL_CLOSE: lambda: self._handle_partial_close(target_msg_id, signal),
+            MessageType.COMPOUND_ACTION: lambda: self._handle_compound_action(msg_id, target_msg_id, signal),
         }
 
         handler = handlers.get(signal.message_type)
@@ -242,7 +404,12 @@ class TelegramMT5Bot:
         signal: TradeSignal,
         is_complete: bool,
     ) -> None:
-        """Handle new trading signal (complete or incomplete)."""
+        """Handle new trading signal (complete or incomplete).
+
+        Uses the configured strategy to determine how many trades to open.
+        For dual_tp strategy: opens scalp (TP1) and runner (last TP) trades.
+        For single strategy: opens one trade with TP1.
+        """
         # Validate symbol
         if not self._config.symbols.is_allowed(signal.symbol):
             print(f"Symbol {signal.symbol} not in allowed list, skipping.")
@@ -251,245 +418,197 @@ class TelegramMT5Bot:
         broker_symbol = self._config.symbols.get_broker_symbol(signal.symbol)
         print(f"  Broker symbol: {broker_symbol}")
 
-        # Check if there's a pending position for this symbol that needs completion
-        pending_pos = self.state.get_pending_position_by_symbol(broker_symbol)
-        if pending_pos and is_complete:
-            print(f"  Found pending position {pending_pos.mt5_ticket} for {broker_symbol}")
-            print("  Completing pending position instead of opening new trade...")
-            await self._complete_pending_position(msg_id, pending_pos, signal)
+        # Check if there's a pending dual position for this symbol that needs completion
+        pending_dual = self.state.get_pending_position_by_symbol(broker_symbol)
+        if pending_dual and is_complete:
+            print(f"  Found pending dual position for {broker_symbol}")
+            print("  Completing pending positions instead of opening new trades...")
+            await self._complete_pending_position(msg_id, pending_dual, signal)
             return
 
         # Calculate default SL if incomplete
         if not is_complete and signal.stop_loss is None:
             signal.stop_loss = self._calculate_default_sl(broker_symbol, signal)
 
-        # Execute the trade
-        result = self.executor.execute_signal(
+        # Get trade configs from strategy
+        trade_configs = self.strategy.get_trades_to_open(signal)
+        if not trade_configs:
+            print("  Strategy returned no trades to open")
+            return
+
+        print(f"  Strategy: opening {len(trade_configs)} trade(s)")
+
+        # Execute trades using dual signal method
+        results = self.executor.execute_dual_signal(
             signal,
+            trade_configs,
             broker_symbol=broker_symbol,
             default_lot_size=self._config.trading.default_lot_size,
         )
 
-        if not result["success"]:
-            print(f"\nTrade failed: {result['error']}")
-            return
-
-        self._log_trade_executed(result)
-
-        # Track position
+        # Track each successful trade
         status = PositionStatus.OPEN if is_complete else PositionStatus.PENDING_COMPLETION
-        tracked = TrackedPosition(
-            telegram_msg_id=msg_id,
-            mt5_ticket=result["ticket"],
-            symbol=result["symbol"],
-            order_type=signal.order_type,
-            entry_price=result["price"],
-            stop_loss=signal.stop_loss,
-            take_profits=signal.take_profits,
-            lot_size=result["volume"],
-            opened_at=datetime.now(),
-            is_complete=is_complete,
-            status=status,
-            tps_hit=[],
-        )
-        self.state.add_position(tracked)
-        self.state.save()
+        now = datetime.now()
+        any_success = False
 
-        # Start timeout if incomplete
-        if not is_complete:
-            await self._start_timeout(msg_id, result["ticket"])
-            print("Started 2-minute timeout for incomplete signal")
+        for trade_cfg in trade_configs:
+            role_key = trade_cfg.role.value
+            result = results.get(role_key)
+            if not result or not result.get("success"):
+                continue
 
-        self._record_trade(signal, result)
+            any_success = True
+            self._log_trade_executed(result)
+
+            # Determine TPs for this position
+            if trade_cfg.role == TradeRole.SCALP or trade_cfg.role == TradeRole.SINGLE:
+                pos_tps = [signal.take_profits[0]] if signal.take_profits else []
+            else:  # RUNNER
+                pos_tps = signal.take_profits  # Store all TPs for reference
+
+            tracked = TrackedPosition(
+                telegram_msg_id=msg_id,
+                mt5_ticket=result["ticket"],
+                symbol=result["symbol"],
+                order_type=signal.order_type,
+                entry_price=result["price"],
+                stop_loss=signal.stop_loss,
+                take_profits=pos_tps,
+                lot_size=result["volume"],
+                opened_at=now,
+                is_complete=is_complete,
+                status=status,
+                tps_hit=[],
+                role=trade_cfg.role,
+                # Store original signal data for edit detection
+                original_message_text=signal.comment,
+                original_stop_loss=signal.stop_loss,
+                original_take_profits=signal.take_profits.copy() if signal.take_profits else [],
+            )
+            self.state.add_position(tracked, trade_cfg.role)
+
+        if any_success:
+            self.state.save()
+
+            # Start timeout if incomplete (for all positions)
+            if not is_complete:
+                # Use scalp ticket for timeout (any ticket works since they're linked)
+                scalp_result = results.get("scalp") or results.get("single")
+                if scalp_result and scalp_result.get("success"):
+                    await self._start_timeout(msg_id, scalp_result["ticket"])
+                    timeout_minutes = self._config.trading.incomplete_signal_timeout // 60
+                    print(f"Started {timeout_minutes}-minutes timeout for incomplete signal")
+
+            self._record_trade(signal, results)
 
     async def _complete_pending_position(
         self,
         new_msg_id: int,
-        pending_pos: TrackedPosition,
+        pending_dual: DualPosition,
         signal: TradeSignal,
     ) -> None:
-        """Complete a pending position with SL/TP from new complete signal.
+        """Complete pending dual positions with SL/TP from new complete signal.
 
         Args:
             new_msg_id: The message ID of the complete signal (for future replies)
-            pending_pos: The pending position to complete
+            pending_dual: The DualPosition containing pending positions
             signal: The complete signal with SL/TP values
         """
-        # Cancel the timeout
-        old_msg_id = pending_pos.telegram_msg_id
+        old_msg_id = pending_dual.telegram_msg_id
         self._cancel_timeout(old_msg_id)
 
-        # Determine new SL/TP values
-        new_sl = signal.stop_loss or pending_pos.stop_loss
-        # Use the most profitable TP: lowest for SELL, highest for BUY
-        new_tp = self._get_best_tp(signal.take_profits, pending_pos.order_type)
+        new_sl = signal.stop_loss
 
-        print(f"  Modifying position {pending_pos.mt5_ticket}...")
-        print(f"  New SL: {new_sl}, New TP: {new_tp}")
+        # Update each position in the dual
+        any_success = False
+        for pos in pending_dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                continue
 
-        # Verify position still exists on MT5
-        mt5_pos = self.executor.get_position(pending_pos.mt5_ticket)
-        if mt5_pos is None:
-            print(f"\nWARNING: Position {pending_pos.mt5_ticket} no longer exists on MT5!")
-            print("  The position may have been closed (SL hit or manual close)")
-            pending_pos.status = PositionStatus.CLOSED
+            # Determine TP based on role
+            if pos.role == TradeRole.RUNNER:
+                new_tp = signal.take_profits[-1] if signal.take_profits else None
+            else:  # SCALP or SINGLE
+                new_tp = signal.take_profits[0] if signal.take_profits else None
+
+            print(f"  Modifying {pos.role.value} position {pos.mt5_ticket}...")
+            print(f"  New SL: {new_sl}, New TP: {new_tp}")
+
+            # Verify position still exists on MT5
+            mt5_pos = self.executor.get_position(pos.mt5_ticket)
+            if mt5_pos is None:
+                print(f"  WARNING: Position {pos.mt5_ticket} no longer exists on MT5!")
+                pos.status = PositionStatus.CLOSED
+                continue
+
+            print(f"  Position verified on MT5: {mt5_pos['symbol']} @ {mt5_pos['price_open']}")
+
+            # Validate SL/TP relative to actual entry price
+            actual_entry = mt5_pos['price_open']
+            is_buy = mt5_pos['type'] == 0  # MT5 type 0 = BUY
+            validated_sl = new_sl
+            validated_tp = new_tp
+
+            # Validate TP
+            if validated_tp is not None:
+                if is_buy and validated_tp <= actual_entry:
+                    print(f"  WARNING: Invalid TP {validated_tp} for BUY @ {actual_entry}")
+                    validated_tp = None
+                elif not is_buy and validated_tp >= actual_entry:
+                    print(f"  WARNING: Invalid TP {validated_tp} for SELL @ {actual_entry}")
+                    validated_tp = None
+
+            # Validate SL
+            if validated_sl is not None:
+                if is_buy and validated_sl >= actual_entry:
+                    print(f"  WARNING: Invalid SL {validated_sl} for BUY @ {actual_entry}")
+                    validated_sl = None
+                elif not is_buy and validated_sl <= actual_entry:
+                    print(f"  WARNING: Invalid SL {validated_sl} for SELL @ {actual_entry}")
+                    validated_sl = None
+
+            if validated_sl is None and validated_tp is None:
+                print(f"  ERROR: Both SL and TP invalid for {pos.role.value}")
+                continue
+
+            result = self.executor.modify_position(pos.mt5_ticket, sl=validated_sl, tp=validated_tp)
+
+            if result["success"]:
+                pos.stop_loss = validated_sl
+                pos.take_profits = signal.take_profits if pos.role == TradeRole.RUNNER else [signal.take_profits[0]] if signal.take_profits else []
+                pos.is_complete = True
+                pos.status = PositionStatus.OPEN
+                pos.telegram_msg_id = new_msg_id
+                any_success = True
+                print(f"  {pos.role.value.upper()} position {pos.mt5_ticket} completed!")
+            else:
+                print(f"  Failed to complete {pos.role.value}: {result['error']}")
+
+        if any_success:
+            # Reassign the dual position to the new message ID
+            self.state.reassign_position(old_msg_id, new_msg_id)
             self.state.save()
-            return
-
-        print(f"  Position verified on MT5: {mt5_pos['symbol']} @ {mt5_pos['price_open']}")
-
-        # Validate SL/TP relative to actual entry price
-        actual_entry = mt5_pos['price_open']
-        is_buy = mt5_pos['type'] == 0  # MT5 type 0 = BUY
-
-        # Validate and fix TP if it's on the wrong side of entry
-        if new_tp is not None:
-            if is_buy and new_tp <= actual_entry:
-                print(f"\nWARNING: Invalid TP {new_tp} for BUY @ {actual_entry} (TP must be above entry)")
-                print("  Signal prices may be stale or corrupted - skipping TP update")
-                new_tp = None  # Don't set invalid TP
-            elif not is_buy and new_tp >= actual_entry:
-                print(f"\nWARNING: Invalid TP {new_tp} for SELL @ {actual_entry} (TP must be below entry)")
-                print("  Signal prices may be stale or corrupted - skipping TP update")
-                new_tp = None
-
-        # Validate and fix SL if it's on the wrong side of entry
-        if new_sl is not None:
-            if is_buy and new_sl >= actual_entry:
-                print(f"\nWARNING: Invalid SL {new_sl} for BUY @ {actual_entry} (SL must be below entry)")
-                print("  Signal prices may be stale or corrupted - skipping SL update")
-                new_sl = None
-            elif not is_buy and new_sl <= actual_entry:
-                print(f"\nWARNING: Invalid SL {new_sl} for SELL @ {actual_entry} (SL must be above entry)")
-                print("  Signal prices may be stale or corrupted - skipping SL update")
-                new_sl = None
-
-        # If both SL and TP are invalid, we can't complete the position properly
-        if new_sl is None and new_tp is None:
-            print("\nERROR: Both SL and TP are invalid - cannot complete position")
-            print("  Keeping existing position SL/TP unchanged")
-            return
-
-        result = self.executor.modify_position(pending_pos.mt5_ticket, sl=new_sl, tp=new_tp)
-
-        if result["success"]:
-            pending_pos.stop_loss = new_sl
-            pending_pos.take_profits = signal.take_profits
-            pending_pos.is_complete = True
-            pending_pos.status = PositionStatus.OPEN
-
-            # Update the message ID so replies to the complete signal can find this position
-            pending_pos.telegram_msg_id = new_msg_id
-            self.state.remove_position(old_msg_id)
-            self.state.add_position(pending_pos)
-            self.state.save()
-
-            print(f"\nPosition {pending_pos.mt5_ticket} completed successfully!")
-            print(f"  SL: {new_sl}")
-            print(f"  TP: {new_tp}")
-            print(f"  TPs: {signal.take_profits}")
-            print(f"  Updated tracking: msg {old_msg_id} -> msg {new_msg_id}")
-        else:
-            print(f"\nFailed to complete position: {result['error']}")
-            print(f"  Full result: {result}")
+            print(f"\nDual position reassigned: msg {old_msg_id} -> msg {new_msg_id}")
 
     def _get_best_tp(self, take_profits: list[float], order_type: OrderType) -> float | None:
-        """Get the furthest (most profitable) TP based on order direction.
+        """Get TP1 (first take profit level) from the list.
 
-        Sets the final TP on MT5 so that intermediate TPs can trigger
-        profit notifications for progressive SL movement.
-
-        For BUY: highest TP (furthest from entry = most profit)
-        For SELL: lowest TP (furthest from entry = most profit)
+        We only use TP1 because it's hit most frequently. TP2/TP3 are ignored.
+        When TP1 is hit, the trade closes automatically on MT5.
 
         Args:
-            take_profits: List of take profit prices
-            order_type: The order direction (BUY/SELL)
+            take_profits: List of take profit prices (TP1, TP2, TP3...)
+            order_type: The order direction (BUY/SELL) - unused but kept for API compatibility
 
         Returns:
-            The most profitable TP, or None if no TPs
+            TP1 (first element), or None if no TPs
         """
+        _ = order_type  # Unused - kept for API compatibility
         if not take_profits:
             return None
 
-        is_sell = order_type in [OrderType.SELL, OrderType.SELL_LIMIT, OrderType.SELL_STOP]
-        return min(take_profits) if is_sell else max(take_profits)
-
-    def _determine_tp_hit(
-        self,
-        signal: TradeSignal,
-        pos: TrackedPosition,
-    ) -> int | None:
-        """Determine which TP number was hit from signal and position context.
-
-        Args:
-            signal: The parsed profit notification signal
-            pos: The tracked position
-
-        Returns:
-            TP number (1, 2, 3, etc.) or None if cannot be determined.
-            Returns None for informational messages that don't confirm a TP hit.
-        """
-        # Only act if parser explicitly detected a TP hit number
-        if signal.tp_hit_number is not None:
-            return signal.tp_hit_number
-
-        # Only act if parser explicitly detected instruction to move SL to entry
-        # (e.g., "move SL to entry", "breakeven", NOT "book profits")
-        if signal.move_sl_to_entry:
-            # If we already have TPs hit, move to next level
-            if pos.tps_hit:
-                return max(pos.tps_hit) + 1
-            else:
-                return 1  # Assume TP1 if explicit move_sl_to_entry instruction
-
-        # If neither tp_hit_number nor move_sl_to_entry is set,
-        # this is just an informational message - don't move SL
-        return None
-
-    def _calculate_progressive_sl(
-        self,
-        tp_number: int,
-        pos: TrackedPosition,
-    ) -> float | None:
-        """Calculate new SL level based on which TP was hit.
-
-        Progressive SL rules:
-        - TP1 hit -> SL moves to Entry
-        - TP2 hit -> SL moves to TP1
-        - TP3 hit -> SL moves to TP2
-        - etc.
-
-        Args:
-            tp_number: Which TP was hit (1, 2, 3, etc.)
-            pos: The tracked position with entry and TP levels
-
-        Returns:
-            New SL price or None if cannot calculate
-        """
-        if tp_number == 1:
-            # TP1 hit -> move to entry
-            return pos.entry_price
-
-        # For TP2+, move to the previous TP level
-        # TPs are stored as a list - need to get the correct one
-        previous_tp_index = tp_number - 2  # TP2 -> index 0 (TP1), TP3 -> index 1 (TP2)
-
-        if not pos.take_profits:
-            print(f"No take_profits stored for position {pos.mt5_ticket}")
-            return pos.entry_price  # Fallback to entry
-
-        # Sort TPs correctly based on order direction
-        is_buy = pos.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
-        sorted_tps = sorted(pos.take_profits, reverse=not is_buy)
-        # For BUY: ascending (TP1 < TP2 < TP3)
-        # For SELL: descending (TP1 > TP2 > TP3)
-
-        if previous_tp_index < 0 or previous_tp_index >= len(sorted_tps):
-            print(f"TP{tp_number - 1} not found in position (only {len(sorted_tps)} TPs)")
-            return pos.entry_price  # Fallback to entry if TP not found
-
-        return sorted_tps[previous_tp_index]
+        # Always use TP1 (first element in the list)
+        return take_profits[0]
 
     def _calculate_default_sl(self, broker_symbol: str, signal: TradeSignal) -> float | None:
         """Calculate default SL based on risk settings."""
@@ -515,39 +634,48 @@ class TelegramMT5Bot:
         target_msg_id: int | None,
         signal: TradeSignal,
     ) -> None:
-        """Handle modification message (update SL/TP)."""
+        """Handle modification message (update SL/TP) for all positions."""
         if target_msg_id is None:
             print("No target position found for modification")
             return
 
-        pos = self.state.get_position_by_msg_id(target_msg_id)
-        if pos is None:
-            print(f"Position for msg {target_msg_id} not found in state")
-            return
-
-        if pos.status == PositionStatus.CLOSED:
-            print(f"Position {pos.mt5_ticket} is already closed")
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"Dual position for msg {target_msg_id} not found in state")
             return
 
         # Cancel timeout if position was pending
         self._cancel_timeout(target_msg_id)
 
-        # Determine new SL/TP values
-        new_sl = signal.new_stop_loss or signal.stop_loss or pos.stop_loss
-        new_tp = self._get_new_tp(signal, pos)
+        # Determine new SL value
+        new_sl = signal.new_stop_loss or signal.stop_loss
 
-        result = self.executor.modify_position(pos.mt5_ticket, sl=new_sl, tp=new_tp)
+        # Modify all positions in the dual
+        for pos in dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket} is already closed")
+                continue
 
-        if result["success"]:
-            pos.stop_loss = new_sl
-            if signal.take_profits:
-                pos.take_profits = signal.take_profits
-            pos.is_complete = True
-            pos.status = PositionStatus.OPEN
-            self.state.save()
-            print(f"Position {pos.mt5_ticket} modified: SL={new_sl}, TP={new_tp}")
-        else:
-            print(f"Modification failed: {result['error']}")
+            # Determine TP based on role
+            if pos.role == TradeRole.RUNNER:
+                new_tp = signal.take_profits[-1] if signal.take_profits else self._get_new_tp(signal, pos)
+            else:
+                new_tp = signal.take_profits[0] if signal.take_profits else self._get_new_tp(signal, pos)
+
+            effective_sl = new_sl or pos.stop_loss
+            result = self.executor.modify_position(pos.mt5_ticket, sl=effective_sl, tp=new_tp)
+
+            if result["success"]:
+                pos.stop_loss = effective_sl
+                if signal.take_profits:
+                    pos.take_profits = signal.take_profits if pos.role == TradeRole.RUNNER else [signal.take_profits[0]]
+                pos.is_complete = True
+                pos.status = PositionStatus.OPEN
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket} modified: SL={effective_sl}, TP={new_tp}")
+            else:
+                print(f"  {pos.role.value.upper()} modification failed: {result['error']}")
+
+        self.state.save()
 
     def _get_new_tp(self, signal: TradeSignal, pos: TrackedPosition) -> float | None:
         """Get new TP value from signal or position."""
@@ -618,92 +746,166 @@ class TelegramMT5Bot:
         target_msg_id: int | None,
         signal: TradeSignal,
     ) -> None:
-        """Handle TP hit / profit notification with progressive SL movement.
+        """Handle profit notification using the strategy.
 
-        Progressive SL rules:
-        - TP1 hit -> SL moves to Entry
-        - TP2 hit -> SL moves to TP1
-        - TP3 hit -> SL moves to TP2
-        - etc.
+        Uses the strategy to determine:
+        1. Whether to ignore the message (e.g., "book profits" without TP hit)
+        2. What actions to take on TP hit (close scalp, move runner to breakeven)
         """
-        print("Profit notification received")
+        print(f"Profit notification received (TP={signal.tp_hit_number})")
+
+        # Check if strategy says to ignore this message
+        if self.strategy.should_ignore_profit_message(signal):
+            print("  Informational profit message (no TP hit) - ignoring per strategy")
+            return
 
         if target_msg_id is None:
             print("No target position found")
             return
 
-        pos = self.state.get_position_by_msg_id(target_msg_id)
-        if pos is None or pos.status == PositionStatus.CLOSED:
-            print("Target position not found or closed")
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print("Target dual position not found in state")
             return
 
-        # Determine which TP was hit
-        tp_number = self._determine_tp_hit(signal, pos)
-        if tp_number is None:
-            print("Could not determine which TP was hit, no action taken")
+        if dual.is_closed:
+            print("All positions already closed")
             return
 
-        print(f"  TP{tp_number} hit detected")
+        # Get actions from strategy
+        actions = self.strategy.on_tp_hit(signal.tp_hit_number, dual, signal)
 
-        # Check if this TP was already processed
-        if tp_number in pos.tps_hit:
-            print(f"  TP{tp_number} already processed, skipping")
+        if not actions:
+            print("  Strategy returned no actions")
             return
 
-        # Calculate new SL based on TP hit
-        new_sl = self._calculate_progressive_sl(tp_number, pos)
-        if new_sl is None:
-            print(f"  Could not calculate new SL for TP{tp_number}")
-            return
+        # Execute each action
+        for action in actions:
+            pos = dual.get_by_role(action.role)
+            if pos is None or pos.status == PositionStatus.CLOSED:
+                continue
 
-        # Only modify if new SL is better (more protective)
-        current_sl = pos.stop_loss
-        if current_sl is not None:
-            is_buy = pos.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
-            if is_buy and new_sl <= current_sl:
-                print(f"  New SL {new_sl} is not better than current {current_sl} for BUY, skipping")
-                return
-            if not is_buy and new_sl >= current_sl:
-                print(f"  New SL {new_sl} is not better than current {current_sl} for SELL, skipping")
-                return
+            if action.action_type == TradeActionType.VERIFY_CLOSED:
+                # Check if position is closed on MT5
+                mt5_pos = self.executor.get_position(pos.mt5_ticket)
+                if mt5_pos is None:
+                    print(f"  {action.role.value.upper()} {pos.mt5_ticket}: Confirmed closed on MT5")
+                    pos.status = PositionStatus.CLOSED
+                    if signal.tp_hit_number:
+                        pos.tps_hit.append(signal.tp_hit_number)
+                else:
+                    print(f"  {action.role.value.upper()} {pos.mt5_ticket}: Still open, scheduling verification")
+                    await self._start_tp_verification_timeout(target_msg_id, pos.mt5_ticket)
 
-        # Move SL
-        result = self.executor.modify_position(pos.mt5_ticket, sl=new_sl)
-        if result["success"]:
-            pos.stop_loss = new_sl
-            pos.tps_hit.append(tp_number)
-            self.state.save()
-            print(f"  TP{tp_number} hit: Moved SL to {new_sl} for position {pos.mt5_ticket}")
-        else:
-            print(f"  Failed to move SL: {result['error']}")
+            elif action.action_type == TradeActionType.MOVE_SL_TO_BREAKEVEN:
+                # Move SL to entry price (breakeven)
+                mt5_pos = self.executor.get_position(pos.mt5_ticket)
+                if mt5_pos is None:
+                    print(f"  {action.role.value.upper()} {pos.mt5_ticket}: Already closed, skipping breakeven")
+                    pos.status = PositionStatus.CLOSED
+                else:
+                    entry_price = action.value if action.value else pos.entry_price
+                    result = self.executor.move_to_breakeven(pos.mt5_ticket, entry_price)
+                    if result["success"]:
+                        pos.stop_loss = entry_price
+                        if signal.tp_hit_number:
+                            pos.tps_hit.append(signal.tp_hit_number)
+                        print(f"  {action.role.value.upper()}: SL moved to breakeven {entry_price}")
+                    else:
+                        print(f"  {action.role.value.upper()}: Failed to move SL: {result['error']}")
+
+            elif action.action_type == TradeActionType.CLOSE:
+                result = self.executor.close_position(pos.mt5_ticket)
+                if result["success"]:
+                    pos.status = PositionStatus.CLOSED
+                    print(f"  {action.role.value.upper()} {pos.mt5_ticket}: Closed")
+                else:
+                    print(f"  {action.role.value.upper()}: Failed to close: {result['error']}")
+
+        self.state.save()
 
     async def _handle_close_signal(
         self,
         target_msg_id: int | None,
-        signal: TradeSignal,
+        _signal: TradeSignal,
     ) -> None:
-        """Handle close signal."""
+        """Handle close signal - closes ALL positions in the dual."""
         if target_msg_id is None:
             print("No target position found to close")
             return
 
-        pos = self.state.get_position_by_msg_id(target_msg_id)
-        if pos is None:
-            print(f"Position for msg {target_msg_id} not found")
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"Dual position for msg {target_msg_id} not found")
             return
 
-        if pos.status == PositionStatus.CLOSED:
-            print(f"Position {pos.mt5_ticket} is already closed")
+        if dual.is_closed:
+            print("All positions already closed")
             return
 
-        result = self.executor.close_position(pos.mt5_ticket)
-        if result["success"]:
-            pos.status = PositionStatus.CLOSED
+        # Close all positions in the dual
+        any_closed = False
+        for pos in dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Already closed")
+                continue
+
+            result = self.executor.close_position(pos.mt5_ticket)
+            if result["success"]:
+                pos.status = PositionStatus.CLOSED
+                any_closed = True
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Closed at {result['closed_at']}")
+            else:
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Failed to close: {result['error']}")
+
+        if any_closed:
             self._cancel_timeout(target_msg_id)
             self.state.save()
-            print(f"Position {pos.mt5_ticket} closed at {result['closed_at']}")
-        else:
-            print(f"Failed to close position: {result['error']}")
+
+    async def _handle_partial_close(
+        self,
+        target_msg_id: int | None,
+        signal: TradeSignal,
+    ) -> None:
+        """Handle partial close signal - applies to ALL positions in the dual."""
+        print(f"Partial close signal received: {signal.close_percentage}%")
+
+        if target_msg_id is None:
+            print("No target position found for partial close")
+            return
+
+        if signal.close_percentage is None:
+            print("No close percentage specified")
+            return
+
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"Dual position for msg {target_msg_id} not found")
+            return
+
+        if dual.is_closed:
+            print("All positions already closed")
+            return
+
+        # Apply partial close to all positions in the dual
+        any_success = False
+        for pos in dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Already closed")
+                continue
+
+            result = self.executor.partial_close(pos.mt5_ticket, signal.close_percentage)
+            if result["success"]:
+                pos.lot_size = result["remaining_volume"]
+                any_success = True
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Partial close successful")
+                print(f"    Closed: {result['closed_volume']} lots @ {result['closed_at']}")
+                print(f"    Remaining: {result['remaining_volume']} lots")
+            else:
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Failed: {result['error']}")
+
+        if any_success:
+            self.state.save()
 
     async def _handle_compound_action(
         self,
@@ -823,22 +1025,39 @@ class TelegramMT5Bot:
             await self._handle_new_signal(msg_id, pending_signal, is_complete=pending_signal.is_complete)
 
     async def _start_timeout(self, msg_id: int, ticket: int) -> None:
-        """Start timeout for incomplete signal."""
+        """Start timeout for incomplete signal - closes ALL positions in the dual."""
+        _ = ticket  # Kept for API compatibility
         timeout_seconds = self._config.trading.incomplete_signal_timeout
 
         async def timeout_handler() -> None:
             await asyncio.sleep(timeout_seconds)
-            pos = self.state.get_position_by_msg_id(msg_id)
-            if pos and pos.status == PositionStatus.PENDING_COMPLETION:
-                print(f"\nTimeout expired for incomplete signal {msg_id}")
-                print(f"Closing position {ticket}...")
-                result = self.executor.close_position(ticket)
+            dual = self.state.get_dual_position_by_msg_id(msg_id)
+            if dual is None:
+                self._pending_timeouts.pop(msg_id, None)
+                return
+
+            # Check if any position is still pending
+            pending_positions = [
+                pos for pos in dual.all_positions
+                if pos.status == PositionStatus.PENDING_COMPLETION
+            ]
+
+            if not pending_positions:
+                self._pending_timeouts.pop(msg_id, None)
+                return
+
+            print(f"\nTimeout expired for incomplete signal {msg_id}")
+            print(f"Closing {len(pending_positions)} pending position(s)...")
+
+            for pos in pending_positions:
+                result = self.executor.close_position(pos.mt5_ticket)
                 if result["success"]:
                     pos.status = PositionStatus.CLOSED
-                    self.state.save()
-                    print("Position closed due to timeout")
+                    print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Closed due to timeout")
                 else:
-                    print(f"Failed to close: {result['error']}")
+                    print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Failed to close: {result['error']}")
+
+            self.state.save()
             self._pending_timeouts.pop(msg_id, None)
 
         task = asyncio.create_task(timeout_handler())
@@ -850,6 +1069,61 @@ class TelegramMT5Bot:
         if task:
             task.cancel()
             print(f"Cancelled timeout for msg {msg_id}")
+
+    async def _start_tp_verification_timeout(self, msg_id: int, ticket: int) -> None:
+        """Start 5-minute verification timeout after TP hit notification.
+
+        If position is still open after 5 minutes, close it manually.
+        This handles cases where MT5 TP was not triggered but signal says TP hit.
+        """
+        # Use the same timeout as incomplete signals (5 minutes)
+        timeout_seconds = self._config.trading.incomplete_signal_timeout
+        # Use ticket as unique key to allow multiple verifications per msg_id
+        timeout_key = (msg_id, ticket)
+
+        async def verification_handler() -> None:
+            await asyncio.sleep(timeout_seconds)
+            # Find the position by ticket (handles dual positions correctly)
+            result = self.state.get_position_by_ticket(ticket)
+            if result is None:
+                print(f"\nTP verification: Position {ticket} not found")
+                self._tp_verification_timeouts.pop(timeout_key, None)
+                return
+
+            pos, role = result
+            if pos.status == PositionStatus.CLOSED:
+                print(f"\nTP verification: {role.value.upper()} {ticket} already closed")
+                self._tp_verification_timeouts.pop(timeout_key, None)
+                return
+
+            # Check MT5 again
+            mt5_pos = self.executor.get_position(ticket)
+            if mt5_pos is None:
+                # Position closed on MT5
+                print(f"\nTP verification: {role.value.upper()} {ticket} confirmed closed on MT5")
+                pos.status = PositionStatus.CLOSED
+                self.state.save()
+            else:
+                # Position still open - force close
+                print(f"\nTP verification: {role.value.upper()} {ticket} still open after 5 min, force closing...")
+                close_result = self.executor.close_position(ticket)
+                if close_result["success"]:
+                    pos.status = PositionStatus.CLOSED
+                    self.state.save()
+                    print(f"  Force closed at {close_result['closed_at']}")
+                else:
+                    print(f"  Failed to force close: {close_result['error']}")
+
+            self._tp_verification_timeouts.pop(timeout_key, None)
+
+        # Cancel any existing verification timeout for this ticket
+        existing_task = self._tp_verification_timeouts.pop(timeout_key, None)
+        if existing_task:
+            existing_task.cancel()
+
+        task = asyncio.create_task(verification_handler())
+        self._tp_verification_timeouts[timeout_key] = task
+        print(f"  Started 5-minute verification timeout for position {ticket}")
 
     def _log_message_received(self, msg_id: int, reply_to: int | None, text: str) -> None:
         """Log received message details."""
@@ -888,6 +1162,11 @@ class TelegramMT5Bot:
         for task in self._pending_timeouts.values():
             task.cancel()
         self._pending_timeouts.clear()
+
+        # Cancel all TP verification timeouts
+        for task in self._tp_verification_timeouts.values():
+            task.cancel()
+        self._tp_verification_timeouts.clear()
 
         # Disconnect Telegram
         if self._telegram.is_connected():

@@ -6,7 +6,7 @@ skip when Docker container is unavailable.
 """
 
 import os
-from typing import Generator
+from collections.abc import Generator
 
 import pytest
 

@@ -7,17 +7,20 @@ opening, modifying, and closing positions.
 Includes automatic reconnection to handle connection drops gracefully.
 """
 
+import contextlib
 import time
+from collections.abc import Callable
+from datetime import UTC, datetime
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
-from tania_signal_copier.models import OrderType, TradeSignal
+from tania_signal_copier.models import OrderType, TradeConfig, TradeSignal
 from tania_signal_copier.mt5_adapter import MT5Adapter, create_mt5_adapter
 
 T = TypeVar("T")
 
 
-def with_reconnect(method: Callable[..., T]) -> Callable[..., T]:
+def with_reconnect[T](method: Callable[..., T]) -> Callable[..., T]:
     """Decorator that ensures connection before executing a method.
 
     If connection is lost, attempts to reconnect before retrying the operation.
@@ -174,10 +177,8 @@ class MT5Executor:
 
         # Clean up existing connection
         if self._mt5:
-            try:
+            with contextlib.suppress(Exception):
                 self._mt5.shutdown()
-            except Exception:
-                pass
             self._mt5 = None
         self.connected = False
 
@@ -261,8 +262,8 @@ class MT5Executor:
 
         info = self._mt5.symbol_info(symbol)
         if info is None:
-            # Try common variations
-            variations = [symbol, f"{symbol}.r", f"{symbol}m", f"{symbol}_"]
+            # Try common variations (different broker naming conventions)
+            variations = [symbol, f"{symbol}b", f"{symbol}.r", f"{symbol}m", f"{symbol}_"]
             for var in variations:
                 info = self._mt5.symbol_info(var)
                 if info:
@@ -437,6 +438,79 @@ class MT5Executor:
             "symbol": symbol,
         }
 
+    def execute_dual_signal(
+        self,
+        signal: TradeSignal,
+        trade_configs: list[TradeConfig],
+        lot_size: float | None = None,
+        broker_symbol: str | None = None,
+        default_lot_size: float = 0.01,
+    ) -> dict[str, dict]:
+        """Execute dual trades for a signal based on strategy configs.
+
+        Args:
+            signal: The parsed trade signal
+            trade_configs: List of TradeConfig objects from the strategy
+            lot_size: Override lot size (optional)
+            broker_symbol: Broker-specific symbol name (optional)
+            default_lot_size: Default lot size if not specified
+
+        Returns:
+            Dict with role names as keys, each containing trade result
+        """
+        results: dict[str, dict] = {}
+
+        for config in trade_configs:
+            # Create a modified signal with the specific TP from the config
+            modified_signal = TradeSignal(
+                symbol=signal.symbol,
+                order_type=signal.order_type,
+                entry_price=signal.entry_price,
+                stop_loss=config.sl if config.sl is not None else signal.stop_loss,
+                take_profits=[config.tp] if config.tp is not None else [],
+                lot_size=signal.lot_size,
+                comment=f"{signal.comment[:180]} [{config.role.value.upper()}]" if signal.comment else f"[{config.role.value.upper()}]",
+                confidence=signal.confidence,
+                message_type=signal.message_type,
+                is_complete=signal.is_complete,
+            )
+
+            # Calculate lot size with multiplier
+            effective_lot_size = lot_size or signal.lot_size or default_lot_size
+            effective_lot_size *= config.lot_multiplier
+
+            result = self.execute_signal(
+                modified_signal,
+                lot_size=effective_lot_size,
+                broker_symbol=broker_symbol,
+                default_lot_size=default_lot_size,
+            )
+
+            results[config.role.value] = result
+
+            if result["success"]:
+                print(f"  {config.role.value.upper()} trade opened: ticket {result['ticket']}, TP={config.tp}")
+            else:
+                print(f"  {config.role.value.upper()} trade failed: {result.get('error', 'Unknown error')}")
+
+        return results
+
+    def move_to_breakeven(self, ticket: int, entry_price: float) -> dict:
+        """Move stop loss to entry price (breakeven).
+
+        This is a convenience wrapper around modify_position that sets
+        the SL to the original entry price.
+
+        Args:
+            ticket: MT5 position ticket
+            entry_price: The original entry price to move SL to
+
+        Returns:
+            Result dict with success status
+        """
+        print(f"  Moving SL to breakeven ({entry_price}) for ticket {ticket}")
+        return self.modify_position(ticket, sl=entry_price)
+
     def _build_order_request(
         self,
         signal: TradeSignal,
@@ -479,10 +553,10 @@ class MT5Executor:
         if signal.stop_loss:
             request["sl"] = round(float(signal.stop_loss), digits)
         if signal.take_profits:
-            # Use the furthest (most profitable) TP so intermediate TPs trigger notifications
-            # For BUY: highest TP, For SELL: lowest TP
-            best_tp = max(signal.take_profits) if is_buy else min(signal.take_profits)
-            request["tp"] = round(float(best_tp), digits)
+            # Only use TP1 (first element) - TP2/TP3 are ignored
+            # TP1 is hit most frequently, so we close the trade there
+            tp1 = signal.take_profits[0]
+            request["tp"] = round(float(tp1), digits)
 
         # Handle pending orders
         if signal.order_type in [
@@ -654,6 +728,89 @@ class MT5Executor:
 
         return {"success": True, "ticket": ticket, "closed_at": price}
 
+    @with_reconnect
+    def partial_close(self, ticket: int, percentage: int) -> dict:
+        """Close a percentage of an open position.
+
+        Auto-reconnects if connection is lost.
+
+        Args:
+            ticket: The MT5 position ticket
+            percentage: Percentage to close (e.g., 70 for 70%)
+
+        Returns:
+            Result dict with 'success' key and close details
+        """
+        if not self.connected or not self._mt5:
+            return {"success": False, "error": "Not connected to MT5"}
+
+        if percentage <= 0 or percentage >= 100:
+            return {"success": False, "error": f"Invalid percentage: {percentage}"}
+
+        pos = self.get_position(ticket)
+        if not pos:
+            return {"success": False, "error": f"Position {ticket} not found"}
+
+        # Calculate lots to close
+        current_volume = pos["volume"]
+        close_volume = current_volume * (percentage / 100.0)
+
+        # Round to symbol's volume step
+        sym_info = self._mt5.symbol_info(pos["symbol"])
+        if sym_info:
+            volume_step = sym_info.volume_step
+            volume_min = sym_info.volume_min
+            close_volume = round(close_volume / volume_step) * volume_step
+            close_volume = max(close_volume, volume_min)
+            # Don't close more than we have
+            close_volume = min(close_volume, current_volume)
+
+        tick = self._mt5.symbol_info_tick(pos["symbol"])
+        if not tick:
+            return {"success": False, "error": "Could not get current price"}
+
+        # Close by placing opposite order
+        is_buy = pos["type"] == 0
+        close_type = self._mt5.ORDER_TYPE_SELL if is_buy else self._mt5.ORDER_TYPE_BUY
+        price = tick.bid if is_buy else tick.ask
+
+        # Determine filling mode
+        if sym_info and sym_info.filling_mode & 1:
+            filling_mode = self._mt5.ORDER_FILLING_FOK
+        elif sym_info and sym_info.filling_mode & 2:
+            filling_mode = self._mt5.ORDER_FILLING_IOC
+        else:
+            filling_mode = self._mt5.ORDER_FILLING_RETURN
+
+        request = {
+            "action": self._mt5.TRADE_ACTION_DEAL,
+            "position": ticket,
+            "symbol": pos["symbol"],
+            "volume": close_volume,
+            "type": close_type,
+            "price": price,
+            "deviation": 20,
+            "magic": 123456,
+            "comment": f"TG Bot Partial Close {percentage}%",
+            "type_time": self._mt5.ORDER_TIME_GTC,
+            "type_filling": filling_mode,
+        }
+
+        result = self._mt5.order_send(request)
+        if result is None or result.retcode != self._mt5.TRADE_RETCODE_DONE:
+            error_msg = result.comment if result else "Partial close failed"
+            return {"success": False, "error": error_msg}
+
+        remaining_volume = current_volume - close_volume
+        return {
+            "success": True,
+            "ticket": ticket,
+            "closed_volume": close_volume,
+            "remaining_volume": remaining_volume,
+            "closed_at": price,
+            "percentage": percentage,
+        }
+
     def calculate_default_sl(
         self,
         symbol: str,
@@ -733,10 +890,7 @@ class MT5Executor:
         if not self._mt5:
             return []
 
-        if symbol:
-            orders = self._mt5.orders_get(symbol=symbol)
-        else:
-            orders = self._mt5.orders_get()
+        orders = self._mt5.orders_get(symbol=symbol) if symbol else self._mt5.orders_get()
 
         if not orders:
             return []
@@ -816,3 +970,61 @@ class MT5Executor:
             return {"success": False, "error": error_msg, "retcode": getattr(result, "retcode", None)}
 
         return {"success": True, "ticket": ticket}
+
+    @with_reconnect
+    def get_history_deals(
+        self,
+        date_from: "datetime | None" = None,
+        date_to: "datetime | None" = None,
+        days: int = 30,
+    ) -> list[dict]:
+        """Get historical deals from MT5.
+
+        Auto-reconnects if connection is lost.
+
+        Args:
+            date_from: Start datetime (optional, defaults to 'days' ago)
+            date_to: End datetime (optional, defaults to now)
+            days: Number of days to look back if date_from not specified
+
+        Returns:
+            List of deal dicts with ticket, symbol, type, volume, price, profit, etc.
+        """
+        from datetime import timedelta
+
+        if not self._mt5:
+            return []
+
+        # Default date range
+        if date_to is None:
+            date_to = datetime.now(UTC)
+        if date_from is None:
+            date_from = date_to - timedelta(days=days)
+
+        deals = self._mt5.history_deals_get(date_from, date_to)
+        if not deals:
+            return []
+
+        result = []
+        for deal in deals:
+            # Filter to only closed trades (entry=1 means exit/close)
+            # entry: 0=in, 1=out, 2=reverse
+            if getattr(deal, "entry", 0) != 1:
+                continue
+
+            result.append({
+                "ticket": deal.ticket,
+                "order": getattr(deal, "order", 0),
+                "time": datetime.fromtimestamp(deal.time, tz=UTC),
+                "symbol": deal.symbol,
+                "type": deal.type,  # 0=buy, 1=sell
+                "volume": deal.volume,
+                "price": deal.price,
+                "profit": deal.profit,
+                "swap": getattr(deal, "swap", 0.0),
+                "commission": getattr(deal, "commission", 0.0),
+                "comment": getattr(deal, "comment", ""),
+                "position_id": getattr(deal, "position_id", 0),
+            })
+
+        return result

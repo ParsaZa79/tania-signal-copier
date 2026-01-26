@@ -31,21 +31,21 @@ from tania_signal_copier.parser import SignalParser
 from tania_signal_copier.state import BotState
 
 __all__ = [
-    # Main bot
-    "TelegramMT5Bot",
-    # Components
-    "SignalParser",
-    "MT5Executor",
-    "BotState",
     # Configuration
     "BotConfig",
-    "config",
+    "BotState",
+    "MT5Executor",
+    "MessageType",
     # Models
     "OrderType",
-    "MessageType",
     "PositionStatus",
-    "TradeSignal",
+    # Components
+    "SignalParser",
+    # Main bot
+    "TelegramMT5Bot",
     "TrackedPosition",
+    "TradeSignal",
+    "config",
 ]
 
 __version__ = "0.1.0"

@@ -10,7 +10,6 @@ import asyncio
 
 from tania_signal_copier.parser import SignalParser
 
-
 TEST_CASES = [
     # === Should NOT trigger move_sl_to_entry ===
     {
@@ -166,7 +165,7 @@ async def main():
             print(f"    ✅ PASSED (action={result['will_take_action']}, tp_hit={result['actual_tp_hit']})")
         else:
             failed += 1
-            print(f"    ❌ FAILED")
+            print("    ❌ FAILED")
             if "error" in result:
                 print(f"       Error: {result['error']}")
             else:

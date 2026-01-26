@@ -170,6 +170,55 @@ class MT5Adapter:
             result = self._client.orders_get()
         return list(result) if result else []
 
+    def history_deals_get(
+        self,
+        date_from: Any = None,
+        date_to: Any = None,
+        position: int | None = None,
+    ) -> list[Any]:
+        """Get history deals within date range or for specific position.
+
+        Args:
+            date_from: Start datetime (datetime object or timestamp)
+            date_to: End datetime (datetime object or timestamp)
+            position: Optional position ticket to filter by
+
+        Returns:
+            List of deal objects
+        """
+        if not self._client:
+            return []
+        if position is not None:
+            result = self._client.history_deals_get(position=position)
+        elif date_from is not None and date_to is not None:
+            result = self._client.history_deals_get(date_from, date_to)
+        else:
+            result = self._client.history_deals_get()
+        return list(result) if result else []
+
+    def symbols_total(self) -> int:
+        """Get total number of available symbols."""
+        if self._client:
+            return self._client.symbols_total()
+        return 0
+
+    def symbols_get(self, group: str | None = None) -> list[Any]:
+        """Get all available symbols, optionally filtered by group pattern.
+
+        Args:
+            group: Optional group filter pattern (e.g., "*USD*" for USD pairs)
+
+        Returns:
+            List of symbol info objects
+        """
+        if not self._client:
+            return []
+        if group is not None:
+            result = self._client.symbols_get(group=group)
+        else:
+            result = self._client.symbols_get()
+        return list(result) if result else []
+
 
 def create_mt5_adapter(
     host: str | None = None,

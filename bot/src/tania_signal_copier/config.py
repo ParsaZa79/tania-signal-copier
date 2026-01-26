@@ -42,7 +42,11 @@ class TradingConfig:
     default_lot_size: float = float(os.getenv("DEFAULT_LOT_SIZE", "0.01"))
     max_risk_percent: float = float(os.getenv("MAX_RISK_PERCENT", "10.0")) / 100.0
     min_confidence: float = 0.7
-    incomplete_signal_timeout: int = 120  # 2 minutes
+    incomplete_signal_timeout: int = 300  # 5 minutes
+    # Strategy: "dual_tp" (default) or "single"
+    strategy_type: str = os.getenv("TRADING_STRATEGY", "dual_tp")
+    # Edit handling: ignore edits received after this many seconds (default 30 min)
+    edit_window_seconds: int = int(os.getenv("EDIT_WINDOW_SECONDS", "1800"))
 
 
 @dataclass

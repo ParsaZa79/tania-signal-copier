@@ -7,6 +7,7 @@ from Telegram messages into structured TradeSignal objects.
 
 import json
 import re
+from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import AssistantMessage, TextBlock
@@ -39,7 +40,7 @@ CLASSIFICATION RULES:
 3. MODIFICATION: Updates SL/TP for an existing trade (often says "move SL to...", "update SL/TP", "new SL")
 4. RE_ENTRY: Provides new entry price/range and SL for the same symbol (contains "re-entry", "re entry", or new entry levels as reply)
 5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result.
-   CRITICAL - "move_sl_to_entry" and "tp_hit_number" rules:
+   CRITICAL - "move_sl_to_entry", "tp_hit_number", and "new_stop_loss" rules:
    - "tp_hit_number": ONLY set if message EXPLICITLY confirms a TP was hit (e.g., "TP1 hit", "First target reached", "TP2 ✅", "Target 1 done"). Otherwise null.
    - "move_sl_to_entry": true ONLY if:
      (a) A specific TP is CONFIRMED hit in the message, OR
@@ -48,9 +49,11 @@ CLASSIFICATION RULES:
      (a) "Book some profits", "Secure profits", "Take some profits" - these are SUGGESTIONS to manually close partial, NOT instructions to move SL
      (b) Pips running messages like "+50 pips", "35 pips profit running" - just informational
      (c) Any message that does NOT explicitly confirm a TP hit or say "move SL"
+   - "new_stop_loss": If message contains "Move SL to XXXX" or "SL to XXXX" with a specific price, extract that price as new_stop_loss. This takes priority over move_sl_to_entry.
 6. CLOSE_SIGNAL: Explicitly says to close a position (e.g., "close gold", "exit trade", "close all")
-7. COMPOUND_ACTION: Contains MULTIPLE distinct actions in ONE message (e.g., "Add Sell-Limit..." AND "Update SL to..."). Use this when a message contains BOTH a new pending order AND a modification to an existing position.
-8. NOT_TRADING: Advertisements, announcements, greetings, or non-trading content
+7. PARTIAL_CLOSE: Instructs to close a percentage of the position (e.g., "Close 70% of the trade", "Close 50%", "close half"). Extract the percentage value (e.g., 70 for "Close 70%", 50 for "close half").
+8. COMPOUND_ACTION: Contains MULTIPLE distinct actions in ONE message (e.g., "Add Sell-Limit..." AND "Update SL to..."). Use this when a message contains BOTH a new pending order AND a modification to an existing position.
+9. NOT_TRADING: Advertisements, announcements, greetings, or non-trading content
 
 For COMPOUND_ACTION, return an "actions" array with each action separately identified.
 
@@ -61,7 +64,7 @@ ORDER TYPE RULES (CRITICAL):
 
 Return JSON:
 {{
-    "message_type": "new_signal_complete|new_signal_incomplete|modification|re_entry|profit_notification|close_signal|compound_action|not_trading",
+    "message_type": "new_signal_complete|new_signal_incomplete|modification|re_entry|profit_notification|close_signal|partial_close|compound_action|not_trading",
     "symbol": "XAUUSD" or null,
     "order_type": "buy|sell|buy_limit|sell_limit|buy_stop|sell_stop" or null,
     "entry_price": number or null,
@@ -75,6 +78,7 @@ Return JSON:
     "move_sl_to_entry": true/false (from profit notification),
     "tp_hit_number": 1|2|3|...|null (which TP was hit, e.g., 1 for TP1, 2 for TP2),
     "close_position": true/false,
+    "close_percentage": number or null (for partial close, e.g., 70 for "Close 70%"),
     "actions": [
         {{
             "action_type": "new_signal|modification",
@@ -157,7 +161,9 @@ Return ONLY valid JSON, no explanation."""
         Returns:
             The raw response text from Claude
         """
+        project_dir = Path("/Users/parsaz/Documents/Dev/Projects/tania-signal-copier/bot-playground").resolve()
         options = ClaudeAgentOptions(
+            cwd=project_dir, # Runs in this directory
             model="opus", # Use Haiku model for the fastest response
             allowed_tools=[],  # No tools needed for parsing
             max_turns=1,  # Single turn for parsing
@@ -215,6 +221,7 @@ Return ONLY valid JSON, no explanation."""
             move_sl_to_entry=data.get("move_sl_to_entry", False),
             tp_hit_number=data.get("tp_hit_number"),
             close_position=data.get("close_position", False),
+            close_percentage=data.get("close_percentage"),
             new_stop_loss=data.get("new_stop_loss"),
             new_take_profit=data.get("new_take_profit"),
             re_entry_price=data.get("re_entry_price"),
@@ -250,3 +257,99 @@ Return ONLY valid JSON, no explanation."""
             except ValueError:
                 pass
         return OrderType.BUY  # Default fallback
+
+    CORRECTION_PROMPT = """You are analyzing a CORRECTION message for a trading signal.
+
+The original signal had these values:
+- Entry Price: {original_entry}
+- Stop Loss: {original_sl}
+- Take Profits: {original_tps}
+- Symbol: {symbol}
+- Order Type: {order_type}
+
+The correction message is: "{correction_text}"
+
+Common shorthand correction patterns traders use:
+- "44*" or "*44" = The significant digits should be 44xx (e.g., 4146 was typo, meant 4446)
+- "SL 2640" or "sl:2640" = New stop loss is 2640
+- "TP 2700" or "tp:2700" = New take profit is 2700
+- Just a number like "4446" = Usually correcting the most recently mentioned or most likely wrong value
+- "44" (two digits) = Replace the significant digits in the wrong value
+
+Analyze the correction and determine what value(s) the trader meant to fix.
+Consider which original value the correction most likely refers to based on digit patterns.
+
+Return JSON:
+{{
+    "corrected_entry": number or null,
+    "corrected_stop_loss": number or null,
+    "corrected_take_profits": [numbers] or null,
+    "confidence": 0-1,
+    "interpretation": "brief explanation of what was corrected and why"
+}}
+
+Return ONLY valid JSON, no explanation outside the JSON."""
+
+    async def parse_correction(
+        self,
+        correction_text: str,
+        original_entry: float | None,
+        original_sl: float | None,
+        original_tps: list[float],
+        symbol: str,
+        order_type: str,
+    ) -> dict | None:
+        """Parse a shorthand correction message with context of the original signal.
+
+        Args:
+            correction_text: The correction message (e.g., "44*", "SL 2640")
+            original_entry: Original entry price from the signal
+            original_sl: Original stop loss from the signal
+            original_tps: Original take profit levels from the signal
+            symbol: Trading symbol (e.g., "XAUUSD")
+            order_type: Order type (e.g., "buy", "sell")
+
+        Returns:
+            Dict with corrected values, or None if parsing failed
+        """
+        prompt = self.CORRECTION_PROMPT.format(
+            correction_text=correction_text,
+            original_entry=original_entry,
+            original_sl=original_sl,
+            original_tps=original_tps,
+            symbol=symbol,
+            order_type=order_type,
+        )
+
+        try:
+            response_text = await self._query_claude(prompt)
+            return self._parse_correction_response(response_text)
+        except Exception as e:
+            print(f"Error parsing correction: {e}")
+            return None
+
+    def _parse_correction_response(self, response_text: str) -> dict | None:
+        """Parse Claude's JSON response for a correction.
+
+        Args:
+            response_text: The raw response from Claude
+
+        Returns:
+            Dict with corrected values, or None if invalid
+        """
+        # Clean up potential markdown code blocks
+        cleaned = re.sub(r"^```json\s*", "", response_text)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+        try:
+            data = json.loads(cleaned)
+            return {
+                "corrected_entry": data.get("corrected_entry"),
+                "corrected_stop_loss": data.get("corrected_stop_loss"),
+                "corrected_take_profits": data.get("corrected_take_profits"),
+                "confidence": data.get("confidence", 0.5),
+                "interpretation": data.get("interpretation", ""),
+            }
+        except json.JSONDecodeError as e:
+            print(f"Error parsing correction JSON: {e}")
+            return None
