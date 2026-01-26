@@ -475,9 +475,12 @@ class MT5Executor:
                 is_complete=signal.is_complete,
             )
 
-            # Calculate lot size with multiplier
-            effective_lot_size = lot_size or signal.lot_size or default_lot_size
-            effective_lot_size *= config.lot_multiplier
+            # Calculate lot size (explicit size overrides multiplier/base logic)
+            if config.lot_size is not None:
+                effective_lot_size = config.lot_size
+            else:
+                effective_lot_size = lot_size or signal.lot_size or default_lot_size
+                effective_lot_size *= config.lot_multiplier
 
             result = self.execute_signal(
                 modified_signal,

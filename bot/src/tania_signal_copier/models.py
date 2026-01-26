@@ -107,6 +107,7 @@ class TradeConfig:
     role: TradeRole
     tp: float | None
     sl: float | None = None
+    lot_size: float | None = None
     lot_multiplier: float = 1.0
 
 

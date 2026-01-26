@@ -436,6 +436,16 @@ class TelegramMT5Bot:
             print("  Strategy returned no trades to open")
             return
 
+        # Apply per-trade lot size overrides (dual_tp)
+        scalp_lot_size = self._config.trading.scalp_lot_size
+        runner_lot_size = self._config.trading.runner_lot_size
+        if scalp_lot_size or runner_lot_size:
+            for trade_cfg in trade_configs:
+                if trade_cfg.role == TradeRole.SCALP and scalp_lot_size:
+                    trade_cfg.lot_size = scalp_lot_size
+                elif trade_cfg.role == TradeRole.RUNNER and runner_lot_size:
+                    trade_cfg.lot_size = runner_lot_size
+
         print(f"  Strategy: opening {len(trade_configs)} trade(s)")
 
         # Execute trades using dual signal method

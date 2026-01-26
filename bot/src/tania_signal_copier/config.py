@@ -14,6 +14,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_optional_float(name: str) -> float | None:
+    raw = os.getenv(name, "")
+    if raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 @dataclass
 class TelegramConfig:
     """Telegram API configuration."""
@@ -41,6 +51,8 @@ class TradingConfig:
 
     default_lot_size: float = float(os.getenv("DEFAULT_LOT_SIZE", "0.01"))
     max_risk_percent: float = float(os.getenv("MAX_RISK_PERCENT", "10.0")) / 100.0
+    scalp_lot_size: float | None = _env_optional_float("SCALP_LOT_SIZE")
+    runner_lot_size: float | None = _env_optional_float("RUNNER_LOT_SIZE")
     min_confidence: float = 0.7
     incomplete_signal_timeout: int = 300  # 5 minutes
     # Strategy: "dual_tp" (default) or "single"
