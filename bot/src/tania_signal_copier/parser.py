@@ -161,7 +161,7 @@ Return ONLY valid JSON, no explanation."""
         Returns:
             The raw response text from Claude
         """
-        project_dir = Path("/Users/parsaz/Documents/Dev/Projects/tania-signal-copier/bot-playground").resolve()
+        project_dir = (Path(__file__).resolve().parents[3] / "bot-playground").resolve()
         options = ClaudeAgentOptions(
             cwd=project_dir, # Runs in this directory
             model="opus", # Use Haiku model for the fastest response
