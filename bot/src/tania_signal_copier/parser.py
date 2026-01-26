@@ -162,6 +162,7 @@ Return ONLY valid JSON, no explanation."""
             The raw response text from Claude
         """
         project_dir = (Path(__file__).resolve().parents[3] / "bot-playground").resolve()
+        print(f"Using project dir: {project_dir}")
         options = ClaudeAgentOptions(
             cwd=project_dir, # Runs in this directory
             model="opus", # Use Haiku model for the fastest response
