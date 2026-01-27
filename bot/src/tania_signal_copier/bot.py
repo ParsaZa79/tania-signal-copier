@@ -343,11 +343,17 @@ class TelegramMT5Bot:
                     pos.stop_loss = new_sl
                 if new_tps:
                     pos.take_profits = new_tps.copy()
+                # Mark as complete if it was pending
+                if pos.status == PositionStatus.PENDING_COMPLETION:
+                    pos.status = PositionStatus.OPEN
+                    pos.is_complete = True
+                    print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Completed via edit!")
+                else:
+                    print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Modified successfully")
                 # Update original values to the corrected ones
                 pos.original_message_text = edited_text
                 pos.original_stop_loss = new_sl
                 pos.original_take_profits = new_tps.copy() if new_tps else []
-                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Modified successfully")
             else:
                 print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Failed - {result.get('error', 'Unknown error')}")
 
@@ -529,6 +535,20 @@ class TelegramMT5Bot:
 
         new_sl = signal.stop_loss
 
+        # ALWAYS reassign the position to the new message ID first
+        # This ensures edits to the completion message are processed even if
+        # the initial modification fails (e.g., due to invalid SL/TP values)
+        self.state.reassign_position(old_msg_id, new_msg_id)
+
+        # Store the completion message's values as "original" for edit detection
+        # This allows the edit handler to detect changes from the completion message
+        for pos in pending_dual.all_positions:
+            pos.original_message_text = signal.comment
+            pos.original_stop_loss = signal.stop_loss
+            pos.original_take_profits = signal.take_profits.copy() if signal.take_profits else []
+
+        print(f"  Position reassigned: msg {old_msg_id} -> msg {new_msg_id}")
+
         # Update each position in the dual
         any_success = False
         for pos in pending_dual.all_positions:
@@ -579,6 +599,7 @@ class TelegramMT5Bot:
 
             if validated_sl is None and validated_tp is None:
                 print(f"  ERROR: Both SL and TP invalid for {pos.role.value}")
+                print("  Position will remain pending - edit the message to fix values")
                 continue
 
             result = self.executor.modify_position(pos.mt5_ticket, sl=validated_sl, tp=validated_tp)
@@ -588,17 +609,17 @@ class TelegramMT5Bot:
                 pos.take_profits = signal.take_profits if pos.role == TradeRole.RUNNER else [signal.take_profits[0]] if signal.take_profits else []
                 pos.is_complete = True
                 pos.status = PositionStatus.OPEN
-                pos.telegram_msg_id = new_msg_id
                 any_success = True
                 print(f"  {pos.role.value.upper()} position {pos.mt5_ticket} completed!")
             else:
                 print(f"  Failed to complete {pos.role.value}: {result['error']}")
+                print("  Position will remain pending - edit the message to fix values")
 
+        self.state.save()
         if any_success:
-            # Reassign the dual position to the new message ID
-            self.state.reassign_position(old_msg_id, new_msg_id)
-            self.state.save()
-            print(f"\nDual position reassigned: msg {old_msg_id} -> msg {new_msg_id}")
+            print(f"\nCompletion successful for {old_msg_id} -> {new_msg_id}")
+        else:
+            print("\nCompletion failed but position reassigned - edit message to fix values")
 
     def _get_best_tp(self, take_profits: list[float], order_type: OrderType) -> float | None:
         """Get TP1 (first take profit level) from the list.
@@ -703,49 +724,72 @@ class TelegramMT5Bot:
         target_msg_id: int | None,
         signal: TradeSignal,
     ) -> None:
-        """Handle re-entry signal (close if in loss, open new)."""
+        """Handle re-entry signal (close all positions if any in loss, open new)."""
         if target_msg_id is None:
             print("No target position found for re-entry")
             return
 
-        pos = self.state.get_position_by_msg_id(target_msg_id)
-        if pos is None:
-            print(f"Position for msg {target_msg_id} not found in state")
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"Dual position for msg {target_msg_id} not found in state")
             return
 
-        if pos.status == PositionStatus.CLOSED:
-            print(f"Position {pos.mt5_ticket} is already closed")
+        # Get all open positions
+        open_positions = [
+            pos for pos in dual.all_positions
+            if pos.status != PositionStatus.CLOSED
+        ]
+
+        if not open_positions:
+            print("All positions are already closed")
             return
 
-        # Only re-enter if in loss
-        if self.executor.is_position_profitable(pos.mt5_ticket):
-            print(f"Position {pos.mt5_ticket} is in profit, ignoring re-entry")
+        # Check if ANY position is in loss - only then do we re-enter
+        any_in_loss = any(
+            not self.executor.is_position_profitable(pos.mt5_ticket)
+            for pos in open_positions
+        )
+
+        if not any_in_loss:
+            tickets = [pos.mt5_ticket for pos in open_positions]
+            print(f"All positions {tickets} are in profit, ignoring re-entry")
             return
 
-        print(f"Position {pos.mt5_ticket} is in loss, processing re-entry...")
+        print(f"Found {len(open_positions)} open position(s), processing re-entry...")
 
-        # Close the original position
-        close_result = self.executor.close_position(pos.mt5_ticket)
-        if not close_result["success"]:
-            print(f"Failed to close original position: {close_result['error']}")
+        # Close ALL open positions
+        any_closed = False
+        ref_pos = None  # Reference position for symbol/order_type/take_profits
+        for pos in open_positions:
+            close_result = self.executor.close_position(pos.mt5_ticket)
+            if close_result["success"]:
+                pos.status = PositionStatus.CLOSED
+                any_closed = True
+                if ref_pos is None:
+                    ref_pos = pos
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Closed at {close_result['closed_at']}")
+            else:
+                print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Failed to close - {close_result['error']}")
+
+        if not any_closed or ref_pos is None:
+            print("Failed to close any positions, aborting re-entry")
             return
 
-        pos.status = PositionStatus.CLOSED
         self._cancel_timeout(target_msg_id)
         self.state.save()
-        print(f"Closed original position at {close_result['closed_at']}")
 
         # Open new position with re-entry parameters
+        # Use ref_pos for symbol/order_type/take_profits
         re_entry_signal = TradeSignal(
-            symbol=signal.symbol or pos.symbol,
-            order_type=pos.order_type,  # Keep same direction
+            symbol=signal.symbol or ref_pos.symbol,
+            order_type=ref_pos.order_type,  # Keep same direction
             entry_price=signal.re_entry_price,
             stop_loss=signal.new_stop_loss or signal.stop_loss,
-            take_profits=pos.take_profits,  # Keep original TPs
+            take_profits=ref_pos.take_profits,  # Keep original TPs
             lot_size=signal.lot_size,
             comment=signal.comment,
             confidence=signal.confidence,
-            message_type=MessageType.NEW_SIGNAL_COMPLETE,
+            message_type=MessageType.RE_ENTRY,
             is_complete=True,
         )
 
