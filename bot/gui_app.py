@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
-from PyQt6.QtGui import QFont, QTextCursor
+from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -17,16 +17,21 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
+    QMenu,
+    QMenuBar,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
+    QSplitter,
+    QStackedWidget,
+    QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -179,61 +184,142 @@ def build_bot_command(prevent_sleep: bool) -> list[str]:
     return cmd
 
 
+class MetricCard(QFrame):
+    """A compact styled card displaying a metric value and label."""
+
+    def __init__(self, label: str, value: str = "-", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("MetricCard")
+        self.setFixedHeight(50)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(0)
+
+        self.value_label = QLabel(value)
+        self.value_label.setObjectName("MetricValue")
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.text_label = QLabel(label)
+        self.text_label.setObjectName("MetricLabel")
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(self.value_label)
+        layout.addWidget(self.text_label)
+
+    def set_value(self, value: str) -> None:
+        self.value_label.setText(value)
+
+
+class InsightCard(QFrame):
+    """A compact styled card for displaying an insight/tip."""
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("InsightCard")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(8)
+
+        icon = QLabel("\u2022")  # Bullet
+        icon.setObjectName("InsightIcon")
+        icon.setFixedWidth(12)
+
+        text_label = QLabel(text)
+        text_label.setObjectName("InsightText")
+        text_label.setWordWrap(True)
+
+        layout.addWidget(icon)
+        layout.addWidget(text_label, stretch=1)
+
+
 def apply_app_style(app: QApplication) -> None:
     app.setStyleSheet(
         f"""
         QMainWindow {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {COLORS["bg0"]}, stop:1 {COLORS["bg1"]});
+            background: {COLORS["bg0"]};
             color: {COLORS["text"]};
-            font-family: "Fira Sans", "Avenir Next", "Segoe UI", sans-serif;
-            font-size: 13px;
+            font-family: "Avenir Next", "Segoe UI", sans-serif;
+            font-size: 12px;
         }}
-        QFrame#HeaderFrame {{
+        QMenuBar {{
+            background: {COLORS["panel"]};
+            color: {COLORS["text"]};
+            border-bottom: 1px solid {COLORS["border"]};
+            padding: 4px;
+        }}
+        QMenuBar::item {{
+            padding: 4px 12px;
+            border-radius: 4px;
+        }}
+        QMenuBar::item:selected {{
+            background: {COLORS["panel_alt"]};
+        }}
+        QMenu {{
+            background: {COLORS["panel"]};
+            color: {COLORS["text"]};
             border: 1px solid {COLORS["border"]};
-            border-radius: 16px;
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 {COLORS["panel"]}, stop:1 {COLORS["panel_alt"]});
+            border-radius: 8px;
+            padding: 4px;
         }}
-        QLabel#HeaderTitle {{
-            font-size: 28px;
-            font-weight: 700;
-            color: {COLORS["accent_strong"]};
+        QMenu::item {{
+            padding: 6px 24px;
+            border-radius: 4px;
         }}
-        QLabel#HeaderSubtitle {{
+        QMenu::item:selected {{
+            background: {COLORS["accent"]};
+            color: {COLORS["bg0"]};
+        }}
+        QStatusBar {{
+            background: {COLORS["panel"]};
             color: {COLORS["muted"]};
-            font-size: 13px;
+            border-top: 1px solid {COLORS["border"]};
         }}
-        QGroupBox {{
+        QTabWidget::pane {{
             border: 1px solid {COLORS["border"]};
-            border-radius: 14px;
-            margin-top: 16px;
-            padding: 16px 14px 14px 14px;
-            background: rgba(15, 28, 56, 0.94);
+            border-radius: 8px;
+            background: rgba(15, 28, 56, 0.6);
+            top: -1px;
+        }}
+        QTabBar::tab {{
+            background: {COLORS["panel"]};
+            color: {COLORS["muted"]};
+            border: 1px solid {COLORS["border"]};
+            border-bottom: none;
+            padding: 8px 20px;
+            margin-right: 2px;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+        }}
+        QTabBar::tab:selected {{
+            background: {COLORS["panel_alt"]};
+            color: {COLORS["accent"]};
             font-weight: 600;
         }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 14px;
-            padding: 0 8px;
-            color: {COLORS["accent"]};
-            font-size: 13px;
+        QTabBar::tab:hover:!selected {{
+            background: {COLORS["panel_alt"]};
         }}
         QLabel {{
             color: {COLORS["text"]};
         }}
         QLabel#MutedLabel {{
             color: {COLORS["muted"]};
-            font-weight: 500;
+            font-size: 11px;
+        }}
+        QLabel#SectionTitle {{
+            color: {COLORS["accent"]};
+            font-weight: 600;
+            font-size: 13px;
+            padding: 4px 0;
         }}
         QLineEdit, QComboBox {{
             border: 1px solid {COLORS["border"]};
-            border-radius: 10px;
-            padding: 7px 10px;
+            border-radius: 6px;
+            padding: 6px 8px;
             background: rgba(19, 35, 72, 0.96);
             color: {COLORS["text"]};
             selection-background-color: {COLORS["info"]};
-            min-height: 30px;
         }}
         QLineEdit:focus, QComboBox:focus {{
             border: 1px solid {COLORS["accent"]};
@@ -246,11 +332,11 @@ def apply_app_style(app: QApplication) -> None:
         }}
         QPushButton {{
             border: 1px solid {COLORS["border"]};
-            border-radius: 12px;
-            padding: 8px 12px;
+            border-radius: 6px;
+            padding: 6px 14px;
             background: rgba(19, 35, 72, 0.98);
             color: {COLORS["text"]};
-            font-weight: 600;
+            font-weight: 500;
         }}
         QPushButton:hover {{
             border-color: {COLORS["accent"]};
@@ -279,15 +365,32 @@ def apply_app_style(app: QApplication) -> None:
         QPushButton#DangerButton:hover {{
             background: #f87171;
         }}
+        QPushButton#NavButton {{
+            border: none;
+            border-radius: 6px;
+            padding: 10px 16px;
+            background: transparent;
+            color: {COLORS["muted"]};
+            font-weight: 500;
+            text-align: left;
+        }}
+        QPushButton#NavButton:hover {{
+            background: rgba(245, 158, 11, 0.1);
+            color: {COLORS["text"]};
+        }}
+        QPushButton#NavButton:checked {{
+            background: rgba(245, 158, 11, 0.2);
+            color: {COLORS["accent"]};
+            font-weight: 600;
+        }}
         QCheckBox {{
             color: {COLORS["muted"]};
-            spacing: 8px;
-            font-weight: 500;
+            spacing: 6px;
         }}
         QCheckBox::indicator {{
-            width: 18px;
-            height: 18px;
-            border-radius: 6px;
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
             border: 1px solid {COLORS["border"]};
             background: rgba(19, 35, 72, 0.9);
         }}
@@ -295,32 +398,55 @@ def apply_app_style(app: QApplication) -> None:
             background: {COLORS["accent"]};
             border-color: {COLORS["accent"]};
         }}
-        QPlainTextEdit {{
+        QFrame#MetricCard {{
             border: 1px solid {COLORS["border"]};
-            border-radius: 14px;
-            background: rgba(9, 18, 38, 0.96);
+            border-radius: 8px;
+            background: rgba(19, 35, 72, 0.7);
+        }}
+        QLabel#MetricValue {{
+            font-size: 18px;
+            font-weight: 700;
+            color: {COLORS["accent_strong"]};
+        }}
+        QLabel#MetricLabel {{
+            font-size: 10px;
+            color: {COLORS["muted"]};
+        }}
+        QFrame#InsightCard {{
+            border: 1px solid {COLORS["border"]};
+            border-radius: 6px;
+            background: rgba(19, 35, 72, 0.5);
+        }}
+        QLabel#InsightText {{
             color: {COLORS["text"]};
-            padding: 10px;
-            selection-background-color: {COLORS["info"]};
-            font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+            font-size: 11px;
+        }}
+        QLabel#InsightIcon {{
+            color: {COLORS["info"]};
             font-size: 12px;
         }}
-        QScrollArea {{
-            border: none;
-            background: transparent;
+        QListWidget {{
+            border: 1px solid {COLORS["border"]};
+            border-radius: 8px;
+            background: rgba(9, 18, 38, 0.96);
+            color: {COLORS["text"]};
+            padding: 4px;
+            font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+            font-size: 11px;
+            outline: none;
         }}
-        QScrollBar:vertical {{
-            background: transparent;
-            width: 12px;
-            margin: 4px;
+        QListWidget::item {{
+            padding: 2px 6px;
+            border-radius: 3px;
         }}
-        QScrollBar::handle:vertical {{
+        QListWidget::item:hover {{
+            background: rgba(245, 158, 11, 0.1);
+        }}
+        QSplitter::handle {{
             background: {COLORS["border"]};
-            border-radius: 6px;
-            min-height: 28px;
         }}
-        QScrollBar::handle:vertical:hover {{
-            background: {COLORS["accent"]};
+        QSplitter::handle:vertical {{
+            height: 3px;
         }}
         """
     )
@@ -329,8 +455,8 @@ def apply_app_style(app: QApplication) -> None:
 class BotGui(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Tania Signal Copier Control Room")
-        self.resize(1200, 850)
+        self.setWindowTitle("Signal Copier Control Room")
+        self.resize(900, 650)
 
         self.env_inputs: dict[str, QLineEdit | QComboBox] = {}
         self.bot_process: QProcess | None = None
@@ -342,23 +468,30 @@ class BotGui(QMainWindow):
         self.prevent_sleep = QCheckBox("Prevent sleep (macOS)")
         self.prevent_sleep.setChecked(sys.platform == "darwin")
 
-        self.bot_status_label = QLabel("Bot: stopped")
-        self.bot_status_label.setObjectName("MutedLabel")
-        self.analysis_status_label = QLabel("Analysis: idle")
-        self.analysis_status_label.setObjectName("MutedLabel")
-
         self.analysis_total_input = QLineEdit(DEFAULT_ANALYSIS_TOTAL)
+        self.analysis_total_input.setFixedWidth(60)
         self.analysis_batch_input = QLineEdit(DEFAULT_ANALYSIS_BATCH)
+        self.analysis_batch_input.setFixedWidth(60)
         self.analysis_delay_input = QLineEdit(DEFAULT_ANALYSIS_DELAY)
+        self.analysis_delay_input.setFixedWidth(40)
 
-        self.summary_view = QPlainTextEdit()
-        self.summary_view.setReadOnly(True)
+        # Metric cards for outcome summary (compact)
+        self.metric_signals = MetricCard("Signals")
+        self.metric_win_rate = MetricCard("Win Rate")
+        self.metric_tp2 = MetricCard("TP2")
+        self.metric_tp1 = MetricCard("TP1")
+        self.metric_sl = MetricCard("SL")
+        self.metric_conversion = MetricCard("TP1\u2192TP2")
+        self.summary_date_label = QLabel("No data loaded")
+        self.summary_date_label.setObjectName("MutedLabel")
 
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        # Log view
+        self.log_view = QListWidget()
+        self.log_view.setSelectionMode(QListWidget.SelectionMode.NoSelection)
 
         self._build_ui()
+        self._build_menu()
+        self._build_statusbar()
         self._load_initial_values()
         self.load_analysis_summary()
 
@@ -368,105 +501,181 @@ class BotGui(QMainWindow):
         self.setCentralWidget(central)
 
         root = QVBoxLayout(central)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(16)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        root.addWidget(self._build_header())
+        # Main splitter: tabs on top, log on bottom
+        splitter = QSplitter(Qt.Orientation.Vertical)
 
-        content = QHBoxLayout()
-        content.setSpacing(20)
-        root.addLayout(content, stretch=1)
+        # Tab widget for main content
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_config_tab(), "Configuration")
+        self.tabs.addTab(self._build_bot_tab(), "Bot Control")
+        self.tabs.addTab(self._build_analysis_tab(), "Analysis")
+        splitter.addWidget(self.tabs)
 
-        content.addWidget(self._build_env_panel(), stretch=1)
-        content.addWidget(self._build_analysis_panel(), stretch=1)
+        # Log panel at bottom
+        log_widget = QWidget()
+        log_layout = QVBoxLayout(log_widget)
+        log_layout.setContentsMargins(8, 8, 8, 8)
+        log_layout.setSpacing(4)
 
-        log_group = QGroupBox("Live Output")
-        log_layout = QVBoxLayout(log_group)
+        log_header = QHBoxLayout()
+        log_title = QLabel("Output")
+        log_title.setObjectName("SectionTitle")
+        clear_log_btn = QPushButton("Clear")
+        clear_log_btn.setFixedWidth(60)
+        clear_log_btn.clicked.connect(lambda: self.log_view.clear())
+        log_header.addWidget(log_title)
+        log_header.addStretch()
+        log_header.addWidget(clear_log_btn)
+        log_layout.addLayout(log_header)
         log_layout.addWidget(self.log_view)
-        root.addWidget(log_group, stretch=1)
+        splitter.addWidget(log_widget)
 
-    def _build_header(self) -> QWidget:
-        frame = QFrame()
-        frame.setObjectName("HeaderFrame")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(4)
+        splitter.setSizes([400, 200])
+        root.addWidget(splitter)
 
-        title = QLabel("Signal Copier Control Room")
-        title.setObjectName("HeaderTitle")
-        subtitle = QLabel("Bold visibility into bot state, TP outcomes, and channel behavior.")
-        subtitle.setObjectName("HeaderSubtitle")
+    def _build_menu(self) -> None:
+        menubar = self.menuBar()
 
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        return frame
+        # File menu
+        file_menu = menubar.addMenu("File")
 
-    def _build_env_panel(self) -> QWidget:
+        save_action = QAction("Save .env", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_env)
+        file_menu.addAction(save_action)
+
+        reload_action = QAction("Reload .env", self)
+        reload_action.setShortcut("Ctrl+R")
+        reload_action.triggered.connect(self.reload_env)
+        file_menu.addAction(reload_action)
+
+        file_menu.addSeparator()
+
+        clear_cache_action = QAction("Clear Cache", self)
+        clear_cache_action.triggered.connect(self.clear_cache)
+        file_menu.addAction(clear_cache_action)
+
+        # Bot menu
+        bot_menu = menubar.addMenu("Bot")
+
+        start_action = QAction("Start Bot", self)
+        start_action.setShortcut("Ctrl+B")
+        start_action.triggered.connect(self.start_bot)
+        bot_menu.addAction(start_action)
+
+        stop_action = QAction("Stop Bot", self)
+        stop_action.setShortcut("Ctrl+Shift+B")
+        stop_action.triggered.connect(self.stop_bot)
+        bot_menu.addAction(stop_action)
+
+        # Analysis menu
+        analysis_menu = menubar.addMenu("Analysis")
+
+        fetch_action = QAction("Fetch Messages", self)
+        fetch_action.triggered.connect(self.fetch_messages)
+        analysis_menu.addAction(fetch_action)
+
+        report_action = QAction("Generate Report", self)
+        report_action.triggered.connect(self.generate_report)
+        analysis_menu.addAction(report_action)
+
+        analysis_menu.addSeparator()
+
+        refresh_action = QAction("Refresh Summary", self)
+        refresh_action.triggered.connect(self.load_analysis_summary)
+        analysis_menu.addAction(refresh_action)
+
+    def _build_statusbar(self) -> None:
+        self.statusbar = QStatusBar()
+        self.setStatusBar(self.statusbar)
+
+        self.bot_status_label = QLabel("Bot: stopped")
+        self.analysis_status_label = QLabel("Analysis: idle")
+
+        self.statusbar.addWidget(self.bot_status_label)
+        self.statusbar.addWidget(QLabel(" | "))
+        self.statusbar.addWidget(self.analysis_status_label)
+
+    def _build_config_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(32)
+
+        # Left column: Telegram + MT5
+        left_col = QVBoxLayout()
+        left_col.setSpacing(16)
+        for section in ["Telegram", "MT5"]:
+            fields = next(f for s, f in ENV_SECTIONS if s == section)
+            left_col.addWidget(self._build_config_section(section, fields))
+        left_col.addStretch()
+
+        left_container = QWidget()
+        left_container.setLayout(left_col)
+        left_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(left_container)
+
+        # Right column: Trading + Optional
+        right_col = QVBoxLayout()
+        right_col.setSpacing(16)
+        for section in ["Trading", "Optional"]:
+            fields = next(f for s, f in ENV_SECTIONS if s == section)
+            right_col.addWidget(self._build_config_section(section, fields))
+        right_col.addStretch()
+
+        right_container = QWidget()
+        right_container.setLayout(right_col)
+        right_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(right_container)
+
+        return widget
+
+    def _build_config_section(self, title: str, fields: list[tuple[str, str, bool]]) -> QWidget:
         container = QWidget()
-        outer = QVBoxLayout(container)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        outer.addWidget(scroll)
+        title_label = QLabel(title)
+        title_label.setObjectName("SectionTitle")
+        layout.addWidget(title_label)
 
-        inner = QWidget()
-        inner_layout = QVBoxLayout(inner)
-        inner_layout.setContentsMargins(4, 4, 12, 4)
-        inner_layout.setSpacing(14)
-
-        for section, fields in ENV_SECTIONS:
-            inner_layout.addWidget(self._build_env_group(section, fields))
-
-        inner_layout.addWidget(self._build_bot_controls())
-        inner_layout.addStretch(1)
-
-        scroll.setWidget(inner)
-        return container
-
-    def _build_env_group(
-        self, section: str, fields: list[tuple[str, str, bool]]
-    ) -> QGroupBox:
-        group = QGroupBox(section)
-        form = QFormLayout(group)
-        form.setSpacing(12)
-        form.setHorizontalSpacing(16)
+        form = QFormLayout()
+        form.setSpacing(8)
+        form.setHorizontalSpacing(12)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         for key, label, is_secret in fields:
-            label_widget = QLabel(label)
-            label_widget.setMinimumWidth(120)
-            label_widget.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
             if key == "TRADING_STRATEGY":
                 widget = QComboBox()
                 widget.addItems(STRATEGY_CHOICES)
                 widget.setEditable(False)
-                widget.setMinimumWidth(180)
+                widget.setMinimumWidth(150)
                 self.env_inputs[key] = widget
-                form.addRow(label_widget, widget)
-                continue
+            else:
+                widget = QLineEdit()
+                widget.setEchoMode(QLineEdit.EchoMode.Password if is_secret else QLineEdit.EchoMode.Normal)
+                widget.setPlaceholderText(label)
+                widget.setMinimumWidth(150)
+                self.env_inputs[key] = widget
+            form.addRow(label, widget)
 
-            entry = QLineEdit()
-            entry.setEchoMode(QLineEdit.EchoMode.Password if is_secret else QLineEdit.EchoMode.Normal)
-            entry.setPlaceholderText(label)
-            entry.setMinimumWidth(180)
-            self.env_inputs[key] = entry
-            form.addRow(label_widget, entry)
+        layout.addLayout(form)
+        return container
 
-        return group
+    def _build_bot_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(16)
 
-    def _build_bot_controls(self) -> QGroupBox:
-        group = QGroupBox("Bot Controls")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(12)
-
-        # Main action buttons row
-        main_btns = QHBoxLayout()
-        main_btns.setSpacing(10)
+        # Bot controls
+        controls = QHBoxLayout()
+        controls.setSpacing(10)
 
         start_btn = QPushButton("Start Bot")
         start_btn.setObjectName("SuccessButton")
@@ -476,141 +685,92 @@ class BotGui(QMainWindow):
         stop_btn.setObjectName("DangerButton")
         stop_btn.clicked.connect(self.stop_bot)
 
-        main_btns.addWidget(start_btn)
-        main_btns.addWidget(stop_btn)
-        layout.addLayout(main_btns)
+        controls.addWidget(start_btn)
+        controls.addWidget(stop_btn)
+        controls.addStretch()
+        layout.addLayout(controls)
 
-        # Secondary buttons row
-        secondary_btns = QHBoxLayout()
-        secondary_btns.setSpacing(10)
+        # Options
+        options = QHBoxLayout()
+        options.setSpacing(20)
+        options.addWidget(self.write_env_on_start)
+        options.addWidget(self.prevent_sleep)
+        options.addStretch()
+        layout.addLayout(options)
 
-        save_btn = QPushButton("Save .env")
-        save_btn.setObjectName("PrimaryButton")
-        save_btn.clicked.connect(self.save_env)
+        # Tips
+        tips = QLabel("Tip: Use Ctrl+B to start and Ctrl+Shift+B to stop the bot.")
+        tips.setObjectName("MutedLabel")
+        layout.addWidget(tips)
 
-        reload_btn = QPushButton("Reload .env")
-        reload_btn.clicked.connect(self.reload_env)
+        layout.addStretch()
+        return widget
 
-        clear_btn = QPushButton("Clear Cache")
-        clear_btn.clicked.connect(self.clear_cache)
+    def _build_analysis_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
-        secondary_btns.addWidget(save_btn)
-        secondary_btns.addWidget(reload_btn)
-        secondary_btns.addWidget(clear_btn)
-        layout.addLayout(secondary_btns)
+        # Controls row
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
 
-        # Checkboxes row
-        checkboxes = QHBoxLayout()
-        checkboxes.setSpacing(20)
-        checkboxes.addWidget(self.write_env_on_start)
-        checkboxes.addWidget(self.prevent_sleep)
-        checkboxes.addStretch(1)
-        layout.addLayout(checkboxes)
+        controls.addWidget(QLabel("Messages:"))
+        controls.addWidget(self.analysis_total_input)
+        controls.addWidget(QLabel("Batch:"))
+        controls.addWidget(self.analysis_batch_input)
+        controls.addWidget(QLabel("Delay:"))
+        controls.addWidget(self.analysis_delay_input)
+        controls.addSpacing(16)
 
-        # Status
-        layout.addWidget(self.bot_status_label)
-
-        hint = QLabel("Tip: Save your .env before live trading sessions.")
-        hint.setObjectName("MutedLabel")
-        layout.addWidget(hint)
-        return group
-
-    def _build_analysis_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
-
-        layout.addWidget(self._build_analysis_controls())
-        layout.addWidget(self._build_summary_group(), stretch=1)
-        layout.addWidget(self._build_insights_group(), stretch=1)
-        return panel
-
-    def _build_analysis_controls(self) -> QGroupBox:
-        group = QGroupBox("Signal Analysis")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(14)
-
-        # Input fields row with form layout for better alignment
-        inputs_layout = QHBoxLayout()
-        inputs_layout.setSpacing(16)
-
-        for label_text, widget in [
-            ("Messages", self.analysis_total_input),
-            ("Batch", self.analysis_batch_input),
-            ("Delay (s)", self.analysis_delay_input),
-        ]:
-            pair = QVBoxLayout()
-            pair.setSpacing(4)
-            lbl = QLabel(label_text)
-            lbl.setObjectName("MutedLabel")
-            widget.setFixedWidth(80)
-            pair.addWidget(lbl)
-            pair.addWidget(widget)
-            inputs_layout.addLayout(pair)
-
-        inputs_layout.addStretch(1)
-        layout.addLayout(inputs_layout)
-
-        # Buttons row 1
-        btn_row1 = QHBoxLayout()
-        btn_row1.setSpacing(10)
-
-        fetch_btn = QPushButton("Fetch Messages")
+        fetch_btn = QPushButton("Fetch")
         fetch_btn.clicked.connect(self.fetch_messages)
-        report_btn = QPushButton("Generate Report")
+        report_btn = QPushButton("Report")
         report_btn.setObjectName("PrimaryButton")
         report_btn.clicked.connect(self.generate_report)
-        combo_btn = QPushButton("Fetch + Report")
-        combo_btn.clicked.connect(self.fetch_and_report)
+        both_btn = QPushButton("Fetch + Report")
+        both_btn.clicked.connect(self.fetch_and_report)
 
-        btn_row1.addWidget(fetch_btn)
-        btn_row1.addWidget(report_btn)
-        btn_row1.addWidget(combo_btn)
-        layout.addLayout(btn_row1)
+        controls.addWidget(fetch_btn)
+        controls.addWidget(report_btn)
+        controls.addWidget(both_btn)
+        controls.addStretch()
+        layout.addLayout(controls)
 
-        # Buttons row 2 with status
-        btn_row2 = QHBoxLayout()
-        btn_row2.setSpacing(10)
+        # Summary section
+        summary_title = QLabel("Outcome Summary")
+        summary_title.setObjectName("SectionTitle")
+        layout.addWidget(summary_title)
+        layout.addWidget(self.summary_date_label)
 
-        refresh_btn = QPushButton("Refresh Summary")
-        refresh_btn.clicked.connect(self.load_analysis_summary)
-        btn_row2.addWidget(refresh_btn)
-        btn_row2.addWidget(self.analysis_status_label)
-        btn_row2.addStretch(1)
-        layout.addLayout(btn_row2)
+        # Metrics grid (compact, single row)
+        metrics = QHBoxLayout()
+        metrics.setSpacing(8)
+        metrics.addWidget(self.metric_signals)
+        metrics.addWidget(self.metric_win_rate)
+        metrics.addWidget(self.metric_tp2)
+        metrics.addWidget(self.metric_tp1)
+        metrics.addWidget(self.metric_sl)
+        metrics.addWidget(self.metric_conversion)
+        metrics.addStretch()
+        layout.addLayout(metrics)
 
-        return group
+        # Insights section
+        insights_title = QLabel("Insights")
+        insights_title.setObjectName("SectionTitle")
+        layout.addWidget(insights_title)
 
-    def _build_summary_group(self) -> QGroupBox:
-        group = QGroupBox("Outcome Summary")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 16, 12, 12)
-        self.summary_view.setMinimumHeight(120)
-        self.summary_view.setMaximumHeight(180)
-        layout.addWidget(self.summary_view)
-        return group
+        insights = [
+            "TP1\u2192TP2 conversion shows runner quality",
+            "If TP1-only dominates, consider earlier partials",
+            "Avg time-to-TP helps tune session timing",
+        ]
+        for text in insights:
+            layout.addWidget(InsightCard(text))
 
-    def _build_insights_group(self) -> QGroupBox:
-        group = QGroupBox("Actionable Insights")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 16, 12, 12)
-        tips = QPlainTextEdit()
-        tips.setReadOnly(True)
-        tips.setMinimumHeight(100)
-        tips.setMaximumHeight(140)
-        tips.setPlainText(
-            "\n".join(
-                [
-                    "- TP1 -> TP2 conversion shows runner quality; track it weekly.",
-                    "- If TP1-only wins dominate, consider earlier partials on runners.",
-                    "- Average time-to-TP helps tune news filters and session timing.",
-                    "- Refresh Summary after any manual fetch to keep metrics aligned.",
-                ]
-            )
-        )
-        layout.addWidget(tips)
-        return group
+        layout.addStretch()
+        return widget
 
     # ---------- Env State ----------
     def _load_initial_values(self) -> None:
@@ -665,9 +825,26 @@ class BotGui(QMainWindow):
     def _append_log(self, text: str) -> None:
         if not text:
             return
-        self.log_view.moveCursor(QTextCursor.MoveOperation.End)
-        self.log_view.insertPlainText(text)
-        self.log_view.moveCursor(QTextCursor.MoveOperation.End)
+        # Split text into lines and add each as a list item
+        lines = text.splitlines()
+        for line in lines:
+            if line.strip():  # Skip empty lines
+                item = QListWidgetItem(line)
+                # Color code based on content
+                if "[bot]" in line.lower():
+                    item.setForeground(Qt.GlobalColor.cyan)
+                elif "[analysis]" in line.lower():
+                    item.setForeground(Qt.GlobalColor.yellow)
+                elif "error" in line.lower():
+                    item.setForeground(Qt.GlobalColor.red)
+                elif "warning" in line.lower():
+                    item.setForeground(Qt.GlobalColor.magenta)
+                self.log_view.addItem(item)
+        # Auto-scroll to bottom
+        self.log_view.scrollToBottom()
+        # Keep only last 1000 lines to prevent memory issues
+        while self.log_view.count() > 1000:
+            self.log_view.takeItem(0)
 
     # ---------- Process Helpers ----------
     def _qprocess_env(self, overrides: dict[str, str]) -> QProcessEnvironment:
@@ -858,21 +1035,29 @@ class BotGui(QMainWindow):
         self.load_analysis_summary()
 
     # ---------- Analysis Summary ----------
+    def _reset_summary_metrics(self, message: str = "No data") -> None:
+        """Reset all metric cards to default state."""
+        self.summary_date_label.setText(message)
+        self.metric_signals.set_value("-")
+        self.metric_win_rate.set_value("-")
+        self.metric_tp2.set_value("-")
+        self.metric_tp1.set_value("-")
+        self.metric_sl.set_value("-")
+        self.metric_conversion.set_value("-")
+
     def load_analysis_summary(self) -> None:
         if not OUTCOMES_PATH.exists():
-            self.summary_view.setPlainText(
-                "No outcomes yet. Run Generate Report after fetching signals."
-            )
+            self._reset_summary_metrics("No outcomes yet. Run Generate Report after fetching signals.")
             return
         try:
             data = json.loads(OUTCOMES_PATH.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            self.summary_view.setPlainText("signals_outcomes.json is not valid JSON.")
+            self._reset_summary_metrics("signals_outcomes.json is not valid JSON.")
             return
 
         signals = data.get("signals", [])
         if not signals:
-            self.summary_view.setPlainText("signals_outcomes.json has no signals.")
+            self._reset_summary_metrics("signals_outcomes.json has no signals.")
             return
 
         total = len(signals)
@@ -911,19 +1096,14 @@ class BotGui(QMainWindow):
         dates = sorted(d for d in (_parse_dt(s.get("date")) for s in signals) if d)
         date_range = f"{dates[0].date()} to {dates[-1].date()}" if dates else "unknown"
 
-        lines = [
-            f"Signals: {total} ({date_range})",
-            f"TP2: {tp2} | TP1-only: {tp1} | SL (inferred): {sl}",
-            f"Win rate: {win_rate:.1f}% | TP1 -> TP2 conversion: {conversion:.1f}%",
-            f"Unnumbered TP hits: {tp_u}",
-            f"Report: {REPORT_PATH}",
-        ]
-        if avg_tp1 is not None:
-            lines.append(f"Avg time to TP1: {avg_tp1:.1f} minutes")
-        if avg_tp2 is not None:
-            lines.append(f"Avg time to TP2: {avg_tp2:.1f} minutes")
-
-        self.summary_view.setPlainText("\n".join(lines))
+        # Update metric cards
+        self.summary_date_label.setText(f"Data: {date_range}")
+        self.metric_signals.set_value(str(total))
+        self.metric_win_rate.set_value(f"{win_rate:.1f}%")
+        self.metric_tp2.set_value(str(tp2))
+        self.metric_tp1.set_value(str(tp1))
+        self.metric_sl.set_value(str(sl))
+        self.metric_conversion.set_value(f"{conversion:.1f}%")
 
     # ---------- Lifecycle ----------
     def closeEvent(self, event) -> None:  # type: ignore[override]
