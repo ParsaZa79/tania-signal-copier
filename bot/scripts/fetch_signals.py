@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""
-Fetch last 200 messages from TaniaTradingAcademy Telegram channel.
+"""Fetch recent Telegram channel messages for offline analysis."""
 
-Fetches in batches of 50 with 5-second delays to avoid rate limiting.
-Saves raw messages to analysis/signals_raw.json for later parsing.
-"""
-
+import argparse
 import asyncio
 import json
 import os
@@ -25,21 +21,46 @@ CHANNEL = os.getenv("TELEGRAM_CHANNEL", "TaniaTradingAcademy")
 # Session file is in the bot directory (parent of scripts) - matches config.py
 SESSION_NAME = str(Path(__file__).parent.parent / "signal_bot_session")
 
-# Fetch settings
-BATCH_SIZE = 50
-TOTAL_MESSAGES = 200
-DELAY_SECONDS = 5
+# Fetch settings (CLI overridable)
+DEFAULT_BATCH_SIZE = 50
+DEFAULT_TOTAL_MESSAGES = 200
+DEFAULT_DELAY_SECONDS = 5.0
 
 # Output file
 OUTPUT_DIR = Path(__file__).parent.parent / "analysis"
 OUTPUT_FILE = OUTPUT_DIR / "signals_raw.json"
 
 
-async def fetch_messages():
+def parse_args() -> argparse.Namespace:
+    """Parse CLI args with env var fallbacks."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--total",
+        type=int,
+        default=int(os.getenv("TELEGRAM_FETCH_TOTAL", str(DEFAULT_TOTAL_MESSAGES))),
+        help="Total messages to fetch (default: 200 or TELEGRAM_FETCH_TOTAL).",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=int(os.getenv("TELEGRAM_FETCH_BATCH", str(DEFAULT_BATCH_SIZE))),
+        help="Batch size per request (default: 50 or TELEGRAM_FETCH_BATCH).",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=float(os.getenv("TELEGRAM_FETCH_DELAY", str(DEFAULT_DELAY_SECONDS))),
+        help="Delay between batches in seconds (default: 5 or TELEGRAM_FETCH_DELAY).",
+    )
+    return parser.parse_args()
+
+
+async def fetch_messages(total_messages: int, batch_size: int, delay_seconds: float) -> None:
     """Fetch messages from Telegram channel in batches."""
     print("Connecting to Telegram...")
     print(f"API ID: {API_ID}")
     print(f"Channel: {CHANNEL}")
+    print(f"Target messages: {total_messages}")
 
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.connect()
@@ -63,13 +84,13 @@ async def fetch_messages():
     # Fetch messages in batches
     all_messages = []
     offset_id = 0
-    batches_needed = (TOTAL_MESSAGES + BATCH_SIZE - 1) // BATCH_SIZE
+    batches_needed = (total_messages + batch_size - 1) // batch_size
 
     for batch_num in range(batches_needed):
         print(f"\nFetching batch {batch_num + 1}/{batches_needed}...")
 
         messages = []
-        async for msg in client.iter_messages(channel, limit=BATCH_SIZE, offset_id=offset_id):
+        async for msg in client.iter_messages(channel, limit=batch_size, offset_id=offset_id):
             msg_data = {
                 "id": msg.id,
                 "date": msg.date.isoformat() if msg.date else None,
@@ -98,13 +119,13 @@ async def fetch_messages():
         save_messages(all_messages)
 
         # Stop if we have enough or no more messages
-        if len(messages) < BATCH_SIZE or len(all_messages) >= TOTAL_MESSAGES:
+        if len(messages) < batch_size or len(all_messages) >= total_messages:
             break
 
         # Wait before next batch
         if batch_num < batches_needed - 1:
-            print(f"  Waiting {DELAY_SECONDS}s before next batch...")
-            await asyncio.sleep(DELAY_SECONDS)
+            print(f"  Waiting {delay_seconds}s before next batch...")
+            await asyncio.sleep(delay_seconds)
 
     await client.disconnect()
 
@@ -161,4 +182,5 @@ def print_summary(messages: list) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(fetch_messages())
+    args = parse_args()
+    asyncio.run(fetch_messages(args.total, args.batch_size, args.delay))
