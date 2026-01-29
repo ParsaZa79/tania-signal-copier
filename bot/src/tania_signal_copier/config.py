@@ -6,12 +6,17 @@ with sensible defaults.
 """
 
 import os
+import sys
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Platform detection
+IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
 
 
 def _env_optional_float(name: str) -> float | None:
@@ -24,13 +29,25 @@ def _env_optional_float(name: str) -> float | None:
         return None
 
 
+def _parse_channel(value: str) -> str | int:
+    """Parse channel value - return int if numeric, otherwise string."""
+    value = value.strip()
+    if not value:
+        return ""
+    # Check if it's a numeric ID (with optional negative sign for -100 prefix)
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
 @dataclass
 class TelegramConfig:
     """Telegram API configuration."""
 
     api_id: int = int(os.getenv("TELEGRAM_API_ID", "0"))
     api_hash: str = os.getenv("TELEGRAM_API_HASH", "")
-    channel: str = os.getenv("TELEGRAM_CHANNEL", "")
+    channel: str | int = _parse_channel(os.getenv("TELEGRAM_CHANNEL", ""))
     session_name: str = "signal_bot_session"
 
 
@@ -41,8 +58,11 @@ class MT5Config:
     login: int = int(os.getenv("MT5_LOGIN", "0"))
     password: str = os.getenv("MT5_PASSWORD", "")
     server: str = os.getenv("MT5_SERVER", "")
+    # Docker settings (macOS only - not used on Windows)
     docker_host: str = os.getenv("MT5_DOCKER_HOST", "localhost")
     docker_port: int = int(os.getenv("MT5_DOCKER_PORT", "8001"))
+    # Windows-specific settings
+    path: str | None = os.getenv("MT5_PATH")  # Path to MT5 terminal (auto-detected if not set)
 
 
 @dataclass

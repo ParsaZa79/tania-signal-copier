@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -32,6 +33,8 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QStatusBar,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -42,6 +45,26 @@ CACHE_PATH = BASE_DIR / ".env.gui_cache.json"
 ANALYSIS_DIR = BASE_DIR / "analysis"
 REPORT_PATH = ANALYSIS_DIR / "report.md"
 OUTCOMES_PATH = ANALYSIS_DIR / "signals_outcomes.json"
+STATE_PATH = BASE_DIR / "bot_state.json"
+
+IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
+
+# Build MT5 fields based on platform
+_MT5_FIELDS: list[tuple[str, str, bool]] = [
+    ("MT5_LOGIN", "Login", False),
+    ("MT5_PASSWORD", "Password", True),
+    ("MT5_SERVER", "Server", False),
+]
+if IS_WINDOWS:
+    # On Windows, add optional path to MT5 terminal (usually auto-detected)
+    _MT5_FIELDS.append(("MT5_PATH", "MT5 Path (optional)", False))
+else:
+    # On macOS/Linux, Docker settings are needed
+    _MT5_FIELDS.extend([
+        ("MT5_DOCKER_HOST", "Docker Host", False),
+        ("MT5_DOCKER_PORT", "Docker Port", False),
+    ])
 
 ENV_SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
     (
@@ -52,16 +75,7 @@ ENV_SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
             ("TELEGRAM_CHANNEL", "Channel", False),
         ],
     ),
-    (
-        "MT5",
-        [
-            ("MT5_LOGIN", "Login", False),
-            ("MT5_PASSWORD", "Password", True),
-            ("MT5_SERVER", "Server", False),
-            ("MT5_DOCKER_HOST", "Docker Host", False),
-            ("MT5_DOCKER_PORT", "Docker Port", False),
-        ],
-    ),
+    ("MT5", _MT5_FIELDS),
     (
         "Trading",
         [
@@ -448,6 +462,38 @@ def apply_app_style(app: QApplication) -> None:
         QSplitter::handle:vertical {{
             height: 3px;
         }}
+        QTableWidget {{
+            border: 1px solid {COLORS["border"]};
+            border-radius: 8px;
+            background: rgba(9, 18, 38, 0.96);
+            color: {COLORS["text"]};
+            gridline-color: {COLORS["border"]};
+            font-size: 11px;
+            outline: none;
+        }}
+        QTableWidget::item {{
+            padding: 4px 8px;
+        }}
+        QTableWidget::item:selected {{
+            background: rgba(245, 158, 11, 0.3);
+            color: {COLORS["text"]};
+        }}
+        QTableWidget::item:alternate {{
+            background: rgba(15, 28, 56, 0.5);
+        }}
+        QHeaderView::section {{
+            background: {COLORS["panel"]};
+            color: {COLORS["accent"]};
+            border: none;
+            border-bottom: 1px solid {COLORS["border"]};
+            border-right: 1px solid {COLORS["border"]};
+            padding: 6px 8px;
+            font-weight: 600;
+            font-size: 11px;
+        }}
+        QHeaderView::section:last {{
+            border-right: none;
+        }}
         """
     )
 
@@ -465,8 +511,14 @@ class BotGui(QMainWindow):
         self.analysis_label = "idle"
 
         self.write_env_on_start = QCheckBox("Write .env on start")
-        self.prevent_sleep = QCheckBox("Prevent sleep (macOS)")
-        self.prevent_sleep.setChecked(sys.platform == "darwin")
+        # Prevent sleep checkbox - only functional on macOS (uses caffeinate)
+        if IS_MACOS:
+            self.prevent_sleep = QCheckBox("Prevent sleep (caffeinate)")
+            self.prevent_sleep.setChecked(True)
+        else:
+            self.prevent_sleep = QCheckBox("Prevent sleep (macOS only)")
+            self.prevent_sleep.setChecked(False)
+            self.prevent_sleep.setEnabled(False)  # Disabled on Windows
 
         self.analysis_total_input = QLineEdit(DEFAULT_ANALYSIS_TOTAL)
         self.analysis_total_input.setFixedWidth(60)
@@ -491,11 +543,24 @@ class BotGui(QMainWindow):
         self.log_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.log_view.customContextMenuRequested.connect(self._show_log_context_menu)
 
+        # Positions table
+        self.positions_table = QTableWidget()
+        self.positions_table.setColumnCount(9)
+        self.positions_table.setHorizontalHeaderLabels([
+            "Msg ID", "Ticket", "Symbol", "Role", "Type", "Entry", "SL", "Lot", "Status"
+        ])
+        self.positions_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.positions_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.positions_table.setAlternatingRowColors(True)
+        self.positions_count_label = QLabel("No positions loaded")
+        self.positions_count_label.setObjectName("MutedLabel")
+
         self._build_ui()
         self._build_menu()
         self._build_statusbar()
         self._load_initial_values()
         self.load_analysis_summary()
+        self.load_positions()
 
     # ---------- UI Construction ----------
     def _build_ui(self) -> None:
@@ -513,6 +578,7 @@ class BotGui(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_config_tab(), "Configuration")
         self.tabs.addTab(self._build_bot_tab(), "Bot Control")
+        self.tabs.addTab(self._build_positions_tab(), "Positions")
         self.tabs.addTab(self._build_analysis_tab(), "Analysis")
         splitter.addWidget(self.tabs)
 
@@ -599,6 +665,20 @@ class BotGui(QMainWindow):
         stop_action.setShortcut("Ctrl+Shift+B")
         stop_action.triggered.connect(self.stop_bot)
         bot_menu.addAction(stop_action)
+
+        # Positions menu
+        positions_menu = menubar.addMenu("Positions")
+
+        refresh_positions_action = QAction("Refresh Positions", self)
+        refresh_positions_action.setShortcut("Ctrl+P")
+        refresh_positions_action.triggered.connect(self.load_positions)
+        positions_menu.addAction(refresh_positions_action)
+
+        positions_menu.addSeparator()
+
+        clear_positions_action = QAction("Clear All Positions", self)
+        clear_positions_action.triggered.connect(self.clear_positions)
+        positions_menu.addAction(clear_positions_action)
 
         # Analysis menu
         analysis_menu = menubar.addMenu("Analysis")
@@ -733,6 +813,43 @@ class BotGui(QMainWindow):
         layout.addWidget(tips)
 
         layout.addStretch()
+        return widget
+
+    def _build_positions_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        # Header row with title and controls
+        header = QHBoxLayout()
+        header.setSpacing(10)
+
+        title = QLabel("Tracked Positions")
+        title.setObjectName("SectionTitle")
+        header.addWidget(title)
+        header.addWidget(self.positions_count_label)
+        header.addStretch()
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.load_positions)
+        header.addWidget(refresh_btn)
+
+        clear_btn = QPushButton("Clear All")
+        clear_btn.setObjectName("DangerButton")
+        clear_btn.clicked.connect(self.clear_positions)
+        header.addWidget(clear_btn)
+
+        layout.addLayout(header)
+
+        # Positions table
+        layout.addWidget(self.positions_table, stretch=1)
+
+        # Tips
+        tips = QLabel("Positions are loaded from bot_state.json. Refresh to see latest changes.")
+        tips.setObjectName("MutedLabel")
+        layout.addWidget(tips)
+
         return widget
 
     def _build_analysis_tab(self) -> QWidget:
@@ -1179,6 +1296,114 @@ class BotGui(QMainWindow):
         self.metric_tp1.set_value(str(tp1))
         self.metric_sl.set_value(str(sl))
         self.metric_conversion.set_value(f"{conversion:.1f}%")
+
+    # ---------- Positions ----------
+    def load_positions(self) -> None:
+        """Load tracked positions from bot_state.json into the table."""
+        self.positions_table.setRowCount(0)
+
+        if not STATE_PATH.exists():
+            self.positions_count_label.setText("No state file found")
+            return
+
+        try:
+            data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            self.positions_count_label.setText("Invalid state file")
+            return
+
+        positions_data = data.get("positions", {})
+        if not positions_data:
+            self.positions_count_label.setText("No positions tracked")
+            return
+
+        # Collect all positions (both scalp and runner from each DualPosition)
+        rows: list[tuple[int, dict]] = []
+        for msg_id_str, dual_data in positions_data.items():
+            msg_id = int(msg_id_str)
+            if dual_data.get("scalp"):
+                rows.append((msg_id, dual_data["scalp"]))
+            if dual_data.get("runner"):
+                rows.append((msg_id, dual_data["runner"]))
+
+        # Sort by opened_at descending (most recent first)
+        def get_opened_at(item: tuple[int, dict]) -> str:
+            return item[1].get("opened_at", "")
+        rows.sort(key=get_opened_at, reverse=True)
+
+        self.positions_table.setRowCount(len(rows))
+
+        for row_idx, (msg_id, pos) in enumerate(rows):
+            # Msg ID
+            self.positions_table.setItem(row_idx, 0, QTableWidgetItem(str(msg_id)))
+            # Ticket
+            self.positions_table.setItem(row_idx, 1, QTableWidgetItem(str(pos.get("mt5_ticket", ""))))
+            # Symbol
+            self.positions_table.setItem(row_idx, 2, QTableWidgetItem(pos.get("symbol", "")))
+            # Role
+            role = pos.get("role", "single").upper()
+            role_item = QTableWidgetItem(role)
+            if role == "SCALP":
+                role_item.setForeground(Qt.GlobalColor.cyan)
+            elif role == "RUNNER":
+                role_item.setForeground(Qt.GlobalColor.yellow)
+            self.positions_table.setItem(row_idx, 3, role_item)
+            # Type
+            self.positions_table.setItem(row_idx, 4, QTableWidgetItem(pos.get("order_type", "").upper()))
+            # Entry
+            entry = pos.get("entry_price")
+            self.positions_table.setItem(row_idx, 5, QTableWidgetItem(f"{entry:.5f}" if entry else ""))
+            # SL
+            sl = pos.get("stop_loss")
+            self.positions_table.setItem(row_idx, 6, QTableWidgetItem(f"{sl:.5f}" if sl else ""))
+            # Lot
+            lot = pos.get("lot_size")
+            self.positions_table.setItem(row_idx, 7, QTableWidgetItem(f"{lot:.2f}" if lot else ""))
+            # Status
+            status = pos.get("status", "").upper()
+            status_item = QTableWidgetItem(status)
+            if status == "OPEN":
+                status_item.setForeground(Qt.GlobalColor.green)
+            elif status == "CLOSED":
+                status_item.setForeground(Qt.GlobalColor.gray)
+            elif status == "PENDING_COMPLETION":
+                status_item.setForeground(Qt.GlobalColor.yellow)
+            self.positions_table.setItem(row_idx, 8, status_item)
+
+        # Resize columns to content
+        header = self.positions_table.horizontalHeader()
+        if header:
+            header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            header.setStretchLastSection(True)
+
+        # Count open vs closed
+        open_count = sum(1 for _, pos in rows if pos.get("status") == "open")
+        closed_count = len(rows) - open_count
+        self.positions_count_label.setText(f"{len(rows)} positions ({open_count} open, {closed_count} closed)")
+
+    def clear_positions(self) -> None:
+        """Clear all tracked positions from bot_state.json after confirmation."""
+        if not STATE_PATH.exists():
+            QMessageBox.information(self, "No State File", "No state file exists to clear.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Clear Positions",
+            "Are you sure you want to clear all tracked positions?\n\nThis will delete bot_state.json.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            STATE_PATH.unlink()
+            self.positions_table.setRowCount(0)
+            self.positions_count_label.setText("Positions cleared")
+            QMessageBox.information(self, "Cleared", "All tracked positions have been cleared.")
+        except OSError as e:
+            QMessageBox.warning(self, "Error", f"Failed to clear positions: {e}")
 
     # ---------- Lifecycle ----------
     def closeEvent(self, event) -> None:  # type: ignore[override]

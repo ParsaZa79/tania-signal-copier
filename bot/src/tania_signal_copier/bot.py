@@ -11,15 +11,103 @@ This module contains the TelegramMT5Bot class which:
 - Manages position state and timeouts
 
 Requirements:
-- Docker with siliconmetatrader5 container running (macOS)
+- MetaTrader 5 terminal (Windows) or Docker container (macOS)
 - Telegram API credentials (api_id, api_hash from https://my.telegram.org)
 - Claude Code CLI installed and authenticated
 """
 
 import asyncio
+import atexit
+import os
+import signal
+import sys
+from pathlib import Path
+
+# Fix Windows console encoding for emoji/unicode characters
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
+
+# Lock file for single instance
+LOCK_FILE = Path(__file__).parent.parent.parent / ".bot.lock"
+
+
+def _kill_process(pid: int) -> bool:
+    """Kill a process by PID. Returns True if killed or doesn't exist."""
+    try:
+        if sys.platform == "win32":
+            import subprocess
+            result = subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0 or "not found" in result.stderr.lower()
+        else:
+            os.kill(pid, signal.SIGTERM)
+            return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return True  # Process doesn't exist or can't be killed
+
+
+def _is_process_running(pid: int) -> bool:
+    """Check if a process with given PID is running."""
+    try:
+        if sys.platform == "win32":
+            import subprocess
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+            )
+            return str(pid) in result.stdout
+        else:
+            os.kill(pid, 0)  # Signal 0 just checks if process exists
+            return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def ensure_single_instance() -> None:
+    """Ensure only one instance of the bot is running.
+
+    If another instance is detected, it will be killed before proceeding.
+    """
+    current_pid = os.getpid()
+
+    # Check if lock file exists
+    if LOCK_FILE.exists():
+        try:
+            old_pid = int(LOCK_FILE.read_text().strip())
+            if old_pid != current_pid and _is_process_running(old_pid):
+                print(f"Found existing bot instance (PID {old_pid}). Killing it...")
+                if _kill_process(old_pid):
+                    print(f"Killed previous instance (PID {old_pid})")
+                    # Wait a moment for the process to fully terminate
+                    import time
+                    time.sleep(1)
+                else:
+                    print(f"Warning: Could not kill previous instance (PID {old_pid})")
+        except (ValueError, OSError) as e:
+            print(f"Warning: Could not read lock file: {e}")
+
+    # Write our PID to lock file
+    LOCK_FILE.write_text(str(current_pid))
+
+    # Register cleanup on exit
+    def cleanup_lock() -> None:
+        try:
+            if LOCK_FILE.exists():
+                stored_pid = int(LOCK_FILE.read_text().strip())
+                if stored_pid == current_pid:
+                    LOCK_FILE.unlink()
+        except (ValueError, OSError):
+            pass
+
+    atexit.register(cleanup_lock)
 
 from telethon import TelegramClient, events
 
@@ -79,6 +167,8 @@ class TelegramMT5Bot:
             self._config.telegram.session_name,
             self._config.telegram.api_id,
             self._config.telegram.api_hash,
+            connection_retries=5,
+            retry_delay=1,
         )
 
         # Timeout management
@@ -102,6 +192,9 @@ class TelegramMT5Bot:
 
         Implements automatic reconnection with exponential backoff for network failures.
         """
+        # Ensure only one instance is running
+        ensure_single_instance()
+
         print("Starting Telegram MT5 Signal Bot...")
 
         # Load saved state
