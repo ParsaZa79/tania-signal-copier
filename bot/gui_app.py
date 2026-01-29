@@ -487,7 +487,9 @@ class BotGui(QMainWindow):
 
         # Log view
         self.log_view = QListWidget()
-        self.log_view.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.log_view.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.log_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.log_view.customContextMenuRequested.connect(self._show_log_context_menu)
 
         self._build_ui()
         self._build_menu()
@@ -523,11 +525,19 @@ class BotGui(QMainWindow):
         log_header = QHBoxLayout()
         log_title = QLabel("Output")
         log_title.setObjectName("SectionTitle")
+        copy_selected_btn = QPushButton("Copy Selected")
+        copy_selected_btn.setFixedWidth(100)
+        copy_selected_btn.clicked.connect(self._copy_selected_logs)
+        copy_all_btn = QPushButton("Copy All")
+        copy_all_btn.setFixedWidth(70)
+        copy_all_btn.clicked.connect(self._copy_all_logs)
         clear_log_btn = QPushButton("Clear")
         clear_log_btn.setFixedWidth(60)
         clear_log_btn.clicked.connect(lambda: self.log_view.clear())
         log_header.addWidget(log_title)
         log_header.addStretch()
+        log_header.addWidget(copy_selected_btn)
+        log_header.addWidget(copy_all_btn)
         log_header.addWidget(clear_log_btn)
         log_layout.addLayout(log_header)
         log_layout.addWidget(self.log_view)
@@ -557,6 +567,25 @@ class BotGui(QMainWindow):
         clear_cache_action = QAction("Clear Cache", self)
         clear_cache_action.triggered.connect(self.clear_cache)
         file_menu.addAction(clear_cache_action)
+
+        # Edit menu (for log operations)
+        edit_menu = menubar.addMenu("Edit")
+
+        copy_selected_action = QAction("Copy Selected Logs", self)
+        copy_selected_action.setShortcut("Ctrl+C")
+        copy_selected_action.triggered.connect(self._copy_selected_logs)
+        edit_menu.addAction(copy_selected_action)
+
+        copy_all_action = QAction("Copy All Logs", self)
+        copy_all_action.setShortcut("Ctrl+Shift+C")
+        copy_all_action.triggered.connect(self._copy_all_logs)
+        edit_menu.addAction(copy_all_action)
+
+        edit_menu.addSeparator()
+
+        clear_logs_action = QAction("Clear Logs", self)
+        clear_logs_action.triggered.connect(lambda: self.log_view.clear())
+        edit_menu.addAction(clear_logs_action)
 
         # Bot menu
         bot_menu = menubar.addMenu("Bot")
@@ -845,6 +874,52 @@ class BotGui(QMainWindow):
         # Keep only last 1000 lines to prevent memory issues
         while self.log_view.count() > 1000:
             self.log_view.takeItem(0)
+
+    def _copy_selected_logs(self) -> None:
+        """Copy selected log lines to clipboard."""
+        selected = self.log_view.selectedItems()
+        if not selected:
+            return
+        text = "\n".join(item.text() for item in selected)
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+
+    def _copy_all_logs(self) -> None:
+        """Copy all log lines to clipboard."""
+        lines = []
+        for i in range(self.log_view.count()):
+            item = self.log_view.item(i)
+            if item:
+                lines.append(item.text())
+        text = "\n".join(lines)
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+
+    def _show_log_context_menu(self, pos) -> None:  # type: ignore[no-untyped-def]
+        """Show context menu for log view."""
+        menu = QMenu(self)
+
+        copy_selected_action = menu.addAction("Copy Selected")
+        copy_selected_action.triggered.connect(self._copy_selected_logs)
+        copy_selected_action.setEnabled(len(self.log_view.selectedItems()) > 0)
+
+        copy_all_action = menu.addAction("Copy All")
+        copy_all_action.triggered.connect(self._copy_all_logs)
+        copy_all_action.setEnabled(self.log_view.count() > 0)
+
+        menu.addSeparator()
+
+        select_all_action = menu.addAction("Select All")
+        select_all_action.triggered.connect(self.log_view.selectAll)
+
+        menu.addSeparator()
+
+        clear_action = menu.addAction("Clear")
+        clear_action.triggered.connect(self.log_view.clear)
+
+        menu.popup(self.log_view.mapToGlobal(pos))
 
     # ---------- Process Helpers ----------
     def _qprocess_env(self, overrides: dict[str, str]) -> QProcessEnvironment:

@@ -531,6 +531,23 @@ class TelegramMT5Bot:
             signal: The complete signal with SL/TP values
         """
         old_msg_id = pending_dual.telegram_msg_id
+
+        # CRITICAL: Verify direction matches before completing
+        # A BUY signal should NOT complete SELL positions and vice versa
+        ref_pos = pending_dual.scalp or pending_dual.runner
+        if ref_pos is not None:
+            pending_is_buy = ref_pos.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
+            signal_is_buy = signal.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
+
+            if pending_is_buy != signal_is_buy:
+                pending_dir = "BUY" if pending_is_buy else "SELL"
+                signal_dir = "BUY" if signal_is_buy else "SELL"
+                print(f"  DIRECTION MISMATCH: Pending position is {pending_dir}, signal is {signal_dir}")
+                print(f"  Cannot complete {pending_dir} position with {signal_dir} signal - treating as new signal")
+                # Don't complete - let caller handle this as a new signal
+                await self._handle_new_signal(new_msg_id, signal, is_complete=True)
+                return
+
         self._cancel_timeout(old_msg_id)
 
         new_sl = signal.stop_loss
@@ -573,29 +590,16 @@ class TelegramMT5Bot:
 
             print(f"  Position verified on MT5: {mt5_pos['symbol']} @ {mt5_pos['price_open']}")
 
-            # Validate SL/TP relative to actual entry price
+            # Validate SL/TP using shared validation function
             actual_entry = mt5_pos['price_open']
             is_buy = mt5_pos['type'] == 0  # MT5 type 0 = BUY
-            validated_sl = new_sl
-            validated_tp = new_tp
+            validated_sl, validated_tp, warnings = self.executor.validate_sl_tp(
+                is_buy, actual_entry, new_sl, new_tp
+            )
 
-            # Validate TP
-            if validated_tp is not None:
-                if is_buy and validated_tp <= actual_entry:
-                    print(f"  WARNING: Invalid TP {validated_tp} for BUY @ {actual_entry}")
-                    validated_tp = None
-                elif not is_buy and validated_tp >= actual_entry:
-                    print(f"  WARNING: Invalid TP {validated_tp} for SELL @ {actual_entry}")
-                    validated_tp = None
-
-            # Validate SL
-            if validated_sl is not None:
-                if is_buy and validated_sl >= actual_entry:
-                    print(f"  WARNING: Invalid SL {validated_sl} for BUY @ {actual_entry}")
-                    validated_sl = None
-                elif not is_buy and validated_sl <= actual_entry:
-                    print(f"  WARNING: Invalid SL {validated_sl} for SELL @ {actual_entry}")
-                    validated_sl = None
+            # Log any validation warnings
+            for w in warnings:
+                print(f"  WARNING: {w}")
 
             if validated_sl is None and validated_tp is None:
                 print(f"  ERROR: Both SL and TP invalid for {pos.role.value}")
@@ -780,11 +784,18 @@ class TelegramMT5Bot:
 
         # Open new position with re-entry parameters
         # Use ref_pos for symbol/order_type/take_profits
+        # Determine SL with fallback chain: signal.new_stop_loss -> signal.stop_loss -> ref_pos.stop_loss
+        re_entry_sl = signal.new_stop_loss or signal.stop_loss or ref_pos.stop_loss
+
+        if re_entry_sl is None or re_entry_sl == 0.0:
+            print("  CRITICAL: No stop loss available for re-entry, aborting")
+            return
+
         re_entry_signal = TradeSignal(
             symbol=signal.symbol or ref_pos.symbol,
             order_type=ref_pos.order_type,  # Keep same direction
             entry_price=signal.re_entry_price,
-            stop_loss=signal.new_stop_loss or signal.stop_loss,
+            stop_loss=re_entry_sl,
             take_profits=ref_pos.take_profits,  # Keep original TPs
             lot_size=signal.lot_size,
             comment=signal.comment,
@@ -1158,15 +1169,25 @@ class TelegramMT5Bot:
                 pos.status = PositionStatus.CLOSED
                 self.state.save()
             else:
-                # Position still open - force close
-                print(f"\nTP verification: {role.value.upper()} {ticket} still open after 5 min, force closing...")
-                close_result = self.executor.close_position(ticket)
-                if close_result["success"]:
-                    pos.status = PositionStatus.CLOSED
-                    self.state.save()
-                    print(f"  Force closed at {close_result['closed_at']}")
+                # Position still open - check if safe to force close
+                original_tp = pos.take_profits[0] if pos.take_profits else None
+                is_safe, current_price = self.executor.would_close_profitably(ticket, original_tp)
+
+                if is_safe:
+                    # Position is profitable or at TP - safe to force close
+                    print(f"\nTP verification: {role.value.upper()} {ticket} still open after 5 min, force closing...")
+                    close_result = self.executor.close_position(ticket)
+                    if close_result["success"]:
+                        pos.status = PositionStatus.CLOSED
+                        self.state.save()
+                        print(f"  Force closed at {close_result['closed_at']}")
+                    else:
+                        print(f"  Failed to force close: {close_result['error']}")
                 else:
-                    print(f"  Failed to force close: {close_result['error']}")
+                    # Position is at a loss - NOT safe to force close
+                    print(f"\nTP verification: {role.value.upper()} {ticket} at LOSS (price={current_price})")
+                    print("  NOT safe to force close - keeping position open with existing SL/TP")
+                    print("  Position will close automatically when SL or TP is hit")
 
             self._tp_verification_timeouts.pop(timeout_key, None)
 

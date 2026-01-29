@@ -319,6 +319,57 @@ class MT5Executor:
         return pos["profit"] >= 0
 
     @with_reconnect
+    def would_close_profitably(
+        self, ticket: int, original_tp: float | None = None
+    ) -> tuple[bool, float | None]:
+        """Check if closing at current price would be profitable.
+
+        For TP verification: only force-close if position has reached TP or is profitable.
+        This prevents force-closing at a loss when "TP hit" notification was premature.
+
+        Auto-reconnects if connection is lost.
+
+        Args:
+            ticket: The MT5 position ticket
+            original_tp: The original take profit price (optional, for threshold calc)
+
+        Returns:
+            Tuple of (is_safe_to_close, current_price).
+            is_safe_to_close is True if position is profitable or at/past TP.
+        """
+        pos = self.get_position(ticket)
+        if pos is None:
+            # Position doesn't exist - probably already closed, safe to proceed
+            return (True, None)
+
+        # Position is in profit - safe to close
+        if pos["profit"] >= 0:
+            current_price = self._get_current_close_price(pos["symbol"], pos["type"])
+            return (True, current_price)
+
+        # Position is at a loss - not safe to force close
+        current_price = self._get_current_close_price(pos["symbol"], pos["type"])
+        return (False, current_price)
+
+    def _get_current_close_price(self, symbol: str, pos_type: int) -> float | None:
+        """Get the price at which a position would close.
+
+        Args:
+            symbol: The trading symbol
+            pos_type: MT5 position type (0=BUY, 1=SELL)
+
+        Returns:
+            Current close price (bid for BUY, ask for SELL) or None
+        """
+        if not self._mt5:
+            return None
+        tick = self._mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return None
+        # BUY positions close at bid, SELL positions close at ask
+        return tick.bid if pos_type == 0 else tick.ask
+
+    @with_reconnect
     def execute_signal(
         self,
         signal: TradeSignal,
@@ -342,6 +393,10 @@ class MT5Executor:
         if not self.connected or not self._mt5:
             return {"success": False, "error": "Not connected to MT5"}
 
+        # Defensive validation: reject trades without stop loss
+        if signal.stop_loss is None or signal.stop_loss == 0.0:
+            return {"success": False, "error": "Stop loss required for all positions"}
+
         # Resolve symbol
         symbol_to_find = broker_symbol or signal.symbol
         sym_data = self.get_symbol_info(symbol_to_find)
@@ -364,8 +419,33 @@ class MT5Executor:
         if tick is None:
             return {"success": False, "error": "Could not get current price"}
 
+        # Determine execution price for validation
+        is_buy = signal.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
+        exec_price = tick.ask if is_buy else tick.bid
+
+        # Validate SL/TP before building order
+        tp_to_validate = signal.take_profits[0] if signal.take_profits else None
+        validated_sl, validated_tp, warnings = self.validate_sl_tp(
+            is_buy, exec_price, signal.stop_loss, tp_to_validate
+        )
+
+        # Log any validation warnings
+        for w in warnings:
+            print(f"    [WARNING] {w}")
+
+        # Update signal with validated values for order building
+        # Note: We need to modify the signal temporarily for _build_order_request
+        original_sl = signal.stop_loss
+        original_tps = signal.take_profits
+        signal.stop_loss = validated_sl
+        signal.take_profits = [validated_tp] if validated_tp is not None else []
+
         # Build order request
         request = self._build_order_request(signal, symbol, lots, tick)
+
+        # Restore original values (in case signal is used elsewhere)
+        signal.stop_loss = original_sl
+        signal.take_profits = original_tps
         print(f"    [DEBUG] Execute request: {request}")
 
         # Verify connection before sending
@@ -857,6 +937,62 @@ class MT5Executor:
 
         is_buy = order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
         return entry_price - sl_distance if is_buy else entry_price + sl_distance
+
+    def validate_sl_tp(
+        self,
+        is_buy: bool,
+        entry_price: float,
+        stop_loss: float | None,
+        take_profit: float | None,
+    ) -> tuple[float | None, float | None, list[str]]:
+        """Validate SL/TP relative to entry price direction.
+
+        For BUY: TP must be above entry, SL must be below entry
+        For SELL: TP must be below entry, SL must be above entry
+
+        Invalid values are returned as None (skipped) with a warning, rather than
+        failing the entire order. This allows partial SL/TP to be set.
+
+        Args:
+            is_buy: True for BUY orders, False for SELL
+            entry_price: The execution/entry price
+            stop_loss: Proposed stop loss (or None)
+            take_profit: Proposed take profit (or None)
+
+        Returns:
+            Tuple of (validated_sl, validated_tp, warnings).
+            Invalid values become None with corresponding warning messages.
+        """
+        warnings: list[str] = []
+        validated_sl = stop_loss
+        validated_tp = take_profit
+
+        if is_buy:
+            # BUY: TP must be above entry, SL must be below entry
+            if validated_tp is not None and validated_tp <= entry_price:
+                warnings.append(
+                    f"Invalid TP {validated_tp} for BUY @ {entry_price} (TP must be > entry) - skipping TP"
+                )
+                validated_tp = None
+            if validated_sl is not None and validated_sl >= entry_price:
+                warnings.append(
+                    f"Invalid SL {validated_sl} for BUY @ {entry_price} (SL must be < entry) - skipping SL"
+                )
+                validated_sl = None
+        else:
+            # SELL: TP must be below entry, SL must be above entry
+            if validated_tp is not None and validated_tp >= entry_price:
+                warnings.append(
+                    f"Invalid TP {validated_tp} for SELL @ {entry_price} (TP must be < entry) - skipping TP"
+                )
+                validated_tp = None
+            if validated_sl is not None and validated_sl <= entry_price:
+                warnings.append(
+                    f"Invalid SL {validated_sl} for SELL @ {entry_price} (SL must be > entry) - skipping SL"
+                )
+                validated_sl = None
+
+        return validated_sl, validated_tp, warnings
 
     @with_reconnect
     def get_current_price(self, symbol: str, for_buy: bool) -> float | None:

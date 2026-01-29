@@ -38,7 +38,7 @@ CLASSIFICATION RULES:
 1. NEW_SIGNAL_COMPLETE: Contains symbol + direction (buy/sell) + entry price + stop loss + at least one take profit
 2. NEW_SIGNAL_INCOMPLETE: Contains symbol + direction but MISSING one or more of: entry price, stop loss, take profit
 3. MODIFICATION: Updates SL/TP for an existing trade (often says "move SL to...", "update SL/TP", "new SL")
-4. RE_ENTRY: Provides new entry price/range and SL for the same symbol (contains "re-entry", "re entry", or new entry levels as reply)
+4. RE_ENTRY: Provides new entry price/range and SL for the same symbol (contains "re-entry", "re entry", or new entry levels as reply). IMPORTANT: Put the stop loss in "stop_loss" field (NOT new_stop_loss) for RE_ENTRY signals.
 5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result.
    CRITICAL - "move_sl_to_entry", "tp_hit_number", and "new_stop_loss" rules:
    - "tp_hit_number": ONLY set if message EXPLICITLY confirms a TP was hit (e.g., "TP1 hit", "First target reached", "TP2 ✅", "Target 1 done"). Otherwise null.
