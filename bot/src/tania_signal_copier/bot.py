@@ -86,9 +86,9 @@ def ensure_single_instance() -> None:
                 print(f"Found existing bot instance (PID {old_pid}). Killing it...")
                 if _kill_process(old_pid):
                     print(f"Killed previous instance (PID {old_pid})")
-                    # Wait a moment for the process to fully terminate
+                    # Wait for the process to fully terminate and release SQLite locks
                     import time
-                    time.sleep(1)
+                    time.sleep(3)  # Increased from 1s to allow SQLite to release session db
                 else:
                     print(f"Warning: Could not kill previous instance (PID {old_pid})")
         except (ValueError, OSError) as e:
@@ -167,8 +167,11 @@ class TelegramMT5Bot:
             self._config.telegram.session_name,
             self._config.telegram.api_id,
             self._config.telegram.api_hash,
-            connection_retries=5,
-            retry_delay=1,
+            connection_retries=10,
+            retry_delay=2,
+            timeout=30,  # Connection timeout in seconds
+            request_retries=5,  # Retry failed requests
+            auto_reconnect=True,  # Auto-reconnect on disconnect
         )
 
         # Timeout management
@@ -186,6 +189,8 @@ class TelegramMT5Bot:
         self._shutdown_requested = False
         self._handle_telegram_event: Callable[..., Any] | None = None
         self._handle_edit_event: Callable[..., Any] | None = None
+        self._keep_alive_task: asyncio.Task | None = None
+        self._keep_alive_interval = 60  # Send ping every 60 seconds
 
     async def start(self) -> None:
         """Start the bot and begin monitoring the Telegram channel.
@@ -251,10 +256,14 @@ class TelegramMT5Bot:
                 self._handle_telegram_event = handle_new_message
                 self._handle_edit_event = handle_edited_message
 
+                # Start keep-alive task to prevent connection timeout
+                self._keep_alive_task = asyncio.create_task(self._keep_alive_loop())
+
                 print("Bot is running! Waiting for signals...")
                 await self._telegram.run_until_disconnected()  # type: ignore[misc]
 
                 # If we get here, connection was lost
+                self._stop_keep_alive()
                 if self._shutdown_requested:
                     break
 
@@ -262,9 +271,18 @@ class TelegramMT5Bot:
 
             except (OSError, ConnectionError) as e:
                 print(f"\nConnection error: {e}")
+                self._stop_keep_alive()
 
             except Exception as e:
                 print(f"\nUnexpected error: {type(e).__name__}: {e}")
+                self._stop_keep_alive()
+
+            # CRITICAL: Properly disconnect to release SQLite session database lock
+            try:
+                if self._telegram.is_connected():
+                    await self._telegram.disconnect()
+            except Exception as disc_err:
+                print(f"Disconnect error (ignored): {disc_err}")
 
             # Check if we should retry
             if self._shutdown_requested:
@@ -289,6 +307,31 @@ class TelegramMT5Bot:
                     print("Failed to reconnect to MT5")
 
         print("Reconnection loop ended.")
+
+    async def _keep_alive_loop(self) -> None:
+        """Periodically ping Telegram to prevent connection timeout.
+
+        Windows network stack and firewalls often close idle TCP connections.
+        This sends a lightweight request every 60 seconds to keep the connection alive.
+        """
+        while not self._shutdown_requested:
+            try:
+                await asyncio.sleep(self._keep_alive_interval)
+                if self._telegram.is_connected():
+                    # Send a lightweight request to keep connection alive
+                    # GetState is the standard Telegram keep-alive ping
+                    await self._telegram.get_me()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                # Log but don't crash - reconnection loop will handle real disconnects
+                print(f"Keep-alive ping failed: {e}")
+
+    def _stop_keep_alive(self) -> None:
+        """Stop the keep-alive task."""
+        if self._keep_alive_task is not None:
+            self._keep_alive_task.cancel()
+            self._keep_alive_task = None
 
     async def _process_message(self, event: events.NewMessage.Event) -> None:
         """Process an incoming Telegram message.
@@ -1325,6 +1368,9 @@ class TelegramMT5Bot:
     def stop(self) -> None:
         """Stop the bot and cleanup resources."""
         self._shutdown_requested = True
+
+        # Stop keep-alive task
+        self._stop_keep_alive()
 
         # Cancel all pending timeouts
         for task in self._pending_timeouts.values():
