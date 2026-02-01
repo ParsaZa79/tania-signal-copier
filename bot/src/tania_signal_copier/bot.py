@@ -568,9 +568,13 @@ class TelegramMT5Bot:
             await self._complete_pending_position(msg_id, pending_dual, signal)
             return
 
-        # Calculate default SL if incomplete
-        if not is_complete and signal.stop_loss is None:
-            signal.stop_loss = self._calculate_default_sl(broker_symbol, signal)
+        # Calculate default SL and TP if incomplete
+        if not is_complete:
+            if signal.stop_loss is None:
+                signal.stop_loss = self._calculate_default_sl(broker_symbol, signal)
+            # Set 1:3 RR TP until actual TPs are sent
+            if not signal.take_profits and signal.stop_loss is not None:
+                signal.take_profits = self._calculate_default_tp(broker_symbol, signal)
 
         # Get trade configs from strategy
         trade_configs = self.strategy.get_trades_to_open(signal)
@@ -799,6 +803,37 @@ class TelegramMT5Bot:
         )
         print(f"  Calculated risk-based SL: {sl:.5f}")
         return sl
+
+    def _calculate_default_tp(
+        self, broker_symbol: str, signal: TradeSignal, rr_ratio: float = 3.0
+    ) -> list[float]:
+        """Calculate default TP based on 1:RR risk-reward ratio.
+
+        Args:
+            broker_symbol: The broker-specific symbol
+            signal: The trade signal (must have stop_loss set)
+            rr_ratio: Risk-reward ratio (default 3.0 for 1:3)
+
+        Returns:
+            List with single TP value, or empty list if calculation fails
+        """
+        if signal.stop_loss is None:
+            return []
+
+        # Get current price as entry reference
+        is_buy = signal.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
+        price = self.executor.get_current_price(broker_symbol, for_buy=is_buy)
+        if price is None:
+            return []
+
+        # Calculate risk (distance from entry to SL)
+        risk = abs(price - signal.stop_loss)
+
+        # Calculate TP at RR ratio (e.g., 1:3 means TP is 3x the risk distance)
+        tp = price + (risk * rr_ratio) if is_buy else price - (risk * rr_ratio)
+
+        print(f"  Calculated 1:{rr_ratio:.0f} RR TP: {tp:.5f} (risk: {risk:.5f})")
+        return [tp]
 
     async def _handle_modification(
         self,
