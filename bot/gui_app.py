@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -42,6 +43,7 @@ from PyQt6.QtWidgets import (
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
 CACHE_PATH = BASE_DIR / ".env.gui_cache.json"
+PRESETS_DIR = BASE_DIR / ".presets"
 ANALYSIS_DIR = BASE_DIR / "analysis"
 REPORT_PATH = ANALYSIS_DIR / "report.md"
 OUTCOMES_PATH = ANALYSIS_DIR / "signals_outcomes.json"
@@ -183,6 +185,106 @@ def load_cache(path: Path) -> dict[str, str]:
 def save_cache(path: Path, values: dict[str, str]) -> None:
     payload = {k: v for k, v in values.items()}
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+# ---------- Preset Functions ----------
+def ensure_presets_dir() -> None:
+    """Create the presets directory if it doesn't exist."""
+    PRESETS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def sanitize_preset_name(name: str) -> str:
+    """Convert a preset name to a safe filename (lowercase, underscores for spaces)."""
+    safe = "".join(c if c.isalnum() or c in " _-" else "" for c in name)
+    return safe.strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def list_presets() -> list[str]:
+    """Return a sorted list of preset names from the presets directory."""
+    ensure_presets_dir()
+    presets: list[str] = []
+    for path in PRESETS_DIR.glob("*.json"):
+        if path.name == "_last_preset.json":
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            name = data.get("name", path.stem)
+            presets.append(name)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return sorted(presets, key=str.lower)
+
+
+def load_preset(name: str) -> dict[str, str] | None:
+    """Load preset values by name. Returns None if not found."""
+    ensure_presets_dir()
+    filename = sanitize_preset_name(name) + ".json"
+    path = PRESETS_DIR / filename
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("values", {})
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def save_preset(name: str, values: dict[str, str]) -> None:
+    """Save preset values to a file."""
+    ensure_presets_dir()
+    filename = sanitize_preset_name(name) + ".json"
+    path = PRESETS_DIR / filename
+    now = datetime.now().isoformat()
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            created_at = existing.get("created_at", now)
+        except (json.JSONDecodeError, OSError):
+            created_at = now
+    else:
+        created_at = now
+    data = {
+        "name": name,
+        "created_at": created_at,
+        "modified_at": now,
+        "values": values,
+    }
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def delete_preset(name: str) -> bool:
+    """Delete a preset by name. Returns True if deleted, False if not found."""
+    ensure_presets_dir()
+    filename = sanitize_preset_name(name) + ".json"
+    path = PRESETS_DIR / filename
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
+def get_last_preset() -> str | None:
+    """Get the name of the last used preset."""
+    path = PRESETS_DIR / "_last_preset.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("name")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def set_last_preset(name: str | None) -> None:
+    """Set the name of the last used preset."""
+    ensure_presets_dir()
+    path = PRESETS_DIR / "_last_preset.json"
+    if name is None:
+        if path.exists():
+            path.unlink()
+    else:
+        data = {"name": name}
+        path.write_text(json.dumps(data), encoding="utf-8")
 
 
 def build_bot_command(prevent_sleep: bool) -> list[str]:
@@ -510,6 +612,13 @@ class BotGui(QMainWindow):
         self.analysis_queue: list[list[str]] = []
         self.analysis_label = "idle"
 
+        # Preset controls (initialized in _build_config_tab)
+        self.preset_combo: QComboBox = QComboBox()
+        self.save_preset_btn: QPushButton = QPushButton("Save")
+        self.save_as_preset_btn: QPushButton = QPushButton("Save As...")
+        self.delete_preset_btn: QPushButton = QPushButton("Delete")
+        self._current_preset: str | None = None
+
         self.write_env_on_start = QCheckBox("Write .env on start")
         # Prevent sleep checkbox - only functional on macOS (uses caffeinate)
         if IS_MACOS:
@@ -710,9 +819,39 @@ class BotGui(QMainWindow):
 
     def _build_config_tab(self) -> QWidget:
         widget = QWidget()
-        layout = QHBoxLayout(widget)
+        layout = QVBoxLayout(widget)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(32)
+        layout.setSpacing(16)
+
+        # Preset controls row at top
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(8)
+
+        preset_label = QLabel("Preset:")
+        preset_row.addWidget(preset_label)
+
+        self.preset_combo.setMinimumWidth(200)
+        self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
+        preset_row.addWidget(self.preset_combo)
+
+        self.save_preset_btn.setEnabled(False)
+        self.save_preset_btn.clicked.connect(self._save_current_preset)
+        preset_row.addWidget(self.save_preset_btn)
+
+        self.save_as_preset_btn.clicked.connect(self._save_preset_as)
+        preset_row.addWidget(self.save_as_preset_btn)
+
+        self.delete_preset_btn.setEnabled(False)
+        self.delete_preset_btn.setObjectName("DangerButton")
+        self.delete_preset_btn.clicked.connect(self._delete_current_preset)
+        preset_row.addWidget(self.delete_preset_btn)
+
+        preset_row.addStretch()
+        layout.addLayout(preset_row)
+
+        # Configuration sections in horizontal layout
+        config_layout = QHBoxLayout()
+        config_layout.setSpacing(32)
 
         # Left column: Telegram + MT5
         left_col = QVBoxLayout()
@@ -725,7 +864,7 @@ class BotGui(QMainWindow):
         left_container = QWidget()
         left_container.setLayout(left_col)
         left_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        layout.addWidget(left_container)
+        config_layout.addWidget(left_container)
 
         # Right column: Trading + Optional
         right_col = QVBoxLayout()
@@ -738,7 +877,9 @@ class BotGui(QMainWindow):
         right_container = QWidget()
         right_container.setLayout(right_col)
         right_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        layout.addWidget(right_container)
+        config_layout.addWidget(right_container)
+
+        layout.addLayout(config_layout, stretch=1)
 
         return widget
 
@@ -920,6 +1061,19 @@ class BotGui(QMainWindow):
 
     # ---------- Env State ----------
     def _load_initial_values(self) -> None:
+        # Refresh preset list
+        self._refresh_preset_list()
+
+        # Try to restore last used preset
+        last_preset = get_last_preset()
+        if last_preset and last_preset in list_presets():
+            # Select the preset in dropdown (this triggers _on_preset_selected)
+            idx = self.preset_combo.findText(last_preset)
+            if idx >= 0:
+                self.preset_combo.setCurrentIndex(idx)
+                return  # Preset loading handles field population
+
+        # No preset - load from .env and cache
         env_values = read_env_file(ENV_PATH)
         cache_values = load_cache(CACHE_PATH)
         merged = {**env_values, **cache_values}
@@ -966,6 +1120,147 @@ class BotGui(QMainWindow):
         if CACHE_PATH.exists():
             CACHE_PATH.unlink()
         QMessageBox.information(self, "Cache cleared", "Cache file removed.")
+
+    # ---------- Preset Management ----------
+    def _refresh_preset_list(self) -> None:
+        """Update the preset dropdown with available presets."""
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self.preset_combo.addItem("")  # Empty item = no preset
+        for name in list_presets():
+            self.preset_combo.addItem(name)
+        self.preset_combo.blockSignals(False)
+        self._update_preset_buttons()
+
+    def _update_preset_buttons(self) -> None:
+        """Enable/disable preset buttons based on current selection."""
+        has_preset = bool(self._current_preset)
+        self.save_preset_btn.setEnabled(has_preset)
+        self.delete_preset_btn.setEnabled(has_preset)
+
+    def _on_preset_selected(self, name: str) -> None:
+        """Handle preset dropdown selection change."""
+        if not name:
+            self._current_preset = None
+            set_last_preset(None)
+            self._update_preset_buttons()
+            return
+
+        values = load_preset(name)
+        if values is None:
+            return
+
+        self._current_preset = name
+        set_last_preset(name)
+
+        # Populate fields with preset values
+        for key, widget in self.env_inputs.items():
+            value = values.get(key, "")
+            if key == "TRADING_STRATEGY":
+                value = value.lower() if value else STRATEGY_CHOICES[0]
+                combo = widget if isinstance(widget, QComboBox) else None
+                if combo is not None:
+                    idx = combo.findText(value)
+                    combo.setCurrentIndex(idx if idx >= 0 else 0)
+            elif isinstance(widget, QLineEdit):
+                widget.setText(value)
+
+        self._update_preset_buttons()
+
+    def _save_current_preset(self) -> None:
+        """Save current values to the selected preset."""
+        if not self._current_preset:
+            return
+
+        values = self._current_values()
+        save_preset(self._current_preset, values)
+        save_cache(CACHE_PATH, values)
+        QMessageBox.information(
+            self,
+            "Preset Saved",
+            f"Preset '{self._current_preset}' has been updated.",
+        )
+
+    def _save_preset_as(self) -> None:
+        """Create a new preset with the current values."""
+        name, ok = QInputDialog.getText(
+            self,
+            "Save Preset As",
+            "Enter a name for the new preset:",
+        )
+        if not ok or not name.strip():
+            return
+
+        name = name.strip()
+        sanitized = sanitize_preset_name(name)
+        if not sanitized:
+            QMessageBox.warning(
+                self,
+                "Invalid Name",
+                "Please enter a valid preset name (alphanumeric characters).",
+            )
+            return
+
+        # Check if preset already exists
+        existing_presets = list_presets()
+        if name in existing_presets:
+            reply = QMessageBox.question(
+                self,
+                "Preset Exists",
+                f"A preset named '{name}' already exists. Overwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        values = self._current_values()
+        save_preset(name, values)
+        save_cache(CACHE_PATH, values)
+
+        self._current_preset = name
+        set_last_preset(name)
+        self._refresh_preset_list()
+
+        # Select the new preset in the dropdown
+        idx = self.preset_combo.findText(name)
+        if idx >= 0:
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.setCurrentIndex(idx)
+            self.preset_combo.blockSignals(False)
+
+        self._update_preset_buttons()
+        QMessageBox.information(
+            self,
+            "Preset Created",
+            f"Preset '{name}' has been created.",
+        )
+
+    def _delete_current_preset(self) -> None:
+        """Delete the currently selected preset."""
+        if not self._current_preset:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Preset",
+            f"Are you sure you want to delete the preset '{self._current_preset}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        deleted_name = self._current_preset
+        delete_preset(deleted_name)
+        self._current_preset = None
+        set_last_preset(None)
+        self._refresh_preset_list()
+        QMessageBox.information(
+            self,
+            "Preset Deleted",
+            f"Preset '{deleted_name}' has been deleted.",
+        )
 
     # ---------- Logging ----------
     def _append_log(self, text: str) -> None:

@@ -13,6 +13,9 @@ wheels/
 .env
 .env.gui_cache.json
 
+# Configuration presets (may contain sensitive data)
+.presets/
+
 # IDE
 .idea/
 .vscode/
@@ -42,3 +45,6 @@ telegram_messages.log
 
 # Application state
 bot_state.json
+
+# Lock files
+.bot.lock
