@@ -74,7 +74,8 @@ class TradingConfig:
     scalp_lot_size: float | None = _env_optional_float("SCALP_LOT_SIZE")
     runner_lot_size: float | None = _env_optional_float("RUNNER_LOT_SIZE")
     min_confidence: float = 0.7
-    incomplete_signal_timeout: int = 300  # 5 minutes
+    # Timeout in seconds for incomplete signals. 0 = disabled (recommended for swing trades)
+    incomplete_signal_timeout: int = int(os.getenv("INCOMPLETE_SIGNAL_TIMEOUT_SECONDS", "0"))
     # Strategy: "dual_tp" (default) or "single"
     strategy_type: str = os.getenv("TRADING_STRATEGY", "dual_tp")
     # Edit handling: ignore edits received after this many seconds (default 30 min)

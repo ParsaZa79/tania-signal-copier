@@ -261,7 +261,7 @@ class TestMT5ExecutorSignalExecution:
             symbol="TOTALLY_INVALID_SYMBOL",
             order_type=OrderType.BUY,
             entry_price=None,
-            stop_loss=None,
+            stop_loss=1000.0,  # Need SL to pass validation and reach symbol check
             take_profits=[],
             lot_size=0.01,
         )
@@ -278,11 +278,17 @@ class TestMT5ExecutorSignalExecution:
 
         WARNING: This test places a real order!
         """
+        # Get current price to set valid SL
+        price = mt5_executor.get_current_price(test_symbol, for_buy=True)
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
         signal = TradeSignal(
             symbol=test_symbol,
             order_type=OrderType.BUY,
             entry_price=None,
-            stop_loss=None,
+            stop_loss=price - (100 * point),  # 100 points below
             take_profits=[],
             lot_size=0.01,
             comment="Integration test BUY",
@@ -310,11 +316,17 @@ class TestMT5ExecutorSignalExecution:
 
         WARNING: This test places a real order!
         """
+        # Get current price to set valid SL
+        price = mt5_executor.get_current_price(test_symbol, for_buy=False)
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
         signal = TradeSignal(
             symbol=test_symbol,
             order_type=OrderType.SELL,
             entry_price=None,
-            stop_loss=None,
+            stop_loss=price + (100 * point),  # 100 points above for SELL
             take_profits=[],
             lot_size=0.01,
             comment="Integration test SELL",
@@ -447,12 +459,18 @@ class TestMT5ExecutorPositionManagement:
 
         WARNING: This test places a real order!
         """
+        # Get current price to set valid SL
+        price = mt5_executor.get_current_price(test_symbol, for_buy=True)
+        sym_data = mt5_executor.get_symbol_info(test_symbol)
+        assert sym_data is not None
+        point = sym_data["info"].point
+
         # Step 1: Open position
         signal = TradeSignal(
             symbol=test_symbol,
             order_type=OrderType.BUY,
             entry_price=None,
-            stop_loss=None,
+            stop_loss=price - (100 * point),  # 100 points below
             take_profits=[],
             lot_size=0.01,
             comment="Lifecycle test",

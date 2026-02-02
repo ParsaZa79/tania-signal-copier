@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
+from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer
 from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -16,7 +18,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -26,16 +27,14 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMenu,
-    QMenuBar,
     QMessageBox,
     QPushButton,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
     QStatusBar,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -98,6 +97,14 @@ ENV_SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
 ]
 
 STRATEGY_CHOICES = ("dual_tp", "single")
+
+# Storage for fetched Telegram channels: list of (display_name, value) tuples
+# For public channels: value is username (e.g., "TaniaTradingAcademy")
+# For private channels: value is ID (e.g., "1723013071")
+CHANNEL_CHOICES: list[tuple[str, str]] = []
+
+SESSION_PATH = BASE_DIR / "signal_bot_session.session"
+
 DEFAULT_ANALYSIS_TOTAL = "1000"
 DEFAULT_ANALYSIS_BATCH = "100"
 DEFAULT_ANALYSIS_DELAY = "2"
@@ -298,6 +305,89 @@ def build_bot_command(prevent_sleep: bool) -> list[str]:
         if caffeinate:
             return [caffeinate, "-dims", *cmd]
     return cmd
+
+
+def fetch_telegram_channels(api_id: int, api_hash: str) -> list[tuple[str, str]]:
+    """
+    Fetch list of all Telegram channels/groups as (display_name, value) tuples.
+
+    For public channels: value is the username (e.g., "TaniaTradingAcademy")
+    For private channels: value is the channel ID (e.g., "1723013071")
+
+    Copies session to a temp file to avoid locking issues if bot is running.
+    Returns empty list on error.
+    """
+    if not SESSION_PATH.exists():
+        return []
+
+    if api_id <= 0 or not api_hash:
+        return []
+
+    try:
+        from telethon import TelegramClient
+        from telethon.tl.types import Channel, Chat
+    except ImportError:
+        return []
+
+    # Copy session to temp file to avoid lock issues with running bot
+    temp_session = None
+    try:
+        temp_dir = tempfile.mkdtemp()
+        temp_session = Path(temp_dir) / "temp_session"
+        shutil.copy(SESSION_PATH, temp_session.with_suffix(".session"))
+
+        async def _fetch() -> list[tuple[str, str]]:
+            channels: list[tuple[str, str]] = []
+            client = TelegramClient(str(temp_session), api_id, api_hash)
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    return []
+
+                # Get all dialogs (chats, channels, groups)
+                async for dialog in client.iter_dialogs():
+                    entity = dialog.entity
+                    # Include channels and megagroups (supergroups)
+                    if isinstance(entity, Channel):
+                        title = entity.title or "Untitled"
+                        # Public channels have a username
+                        if entity.username:
+                            # Use username for public channels
+                            channels.append((title, entity.username))
+                        else:
+                            # Use channel ID for private channels
+                            channels.append((f"{title} ({entity.id})", str(entity.id)))
+                    elif isinstance(entity, Chat):
+                        # Regular groups (not supergroups)
+                        title = entity.title or "Untitled"
+                        channels.append((f"{title} ({entity.id})", str(entity.id)))
+            finally:
+                await client.disconnect()  # type: ignore[misc]
+            return channels
+
+        # Run async function
+        channels = asyncio.run(_fetch())
+
+        # Sort alphabetically by display name
+        channels.sort(key=lambda x: x[0].lower())
+        return channels
+
+    except Exception:
+        return []
+    finally:
+        # Clean up temp session files
+        if temp_session:
+            for suffix in ["", ".session", ".session-journal"]:
+                temp_file = temp_session.with_suffix(suffix) if suffix else temp_session
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except OSError:
+                        pass
+            try:
+                temp_session.parent.rmdir()
+            except OSError:
+                pass
 
 
 class MetricCard(QFrame):
@@ -612,6 +702,10 @@ class BotGui(QMainWindow):
         self.analysis_queue: list[list[str]] = []
         self.analysis_label = "idle"
 
+        # Channel combo and refresh button (initialized in _build_config_section)
+        self.channel_combo: QComboBox = QComboBox()
+        self.channel_refresh_btn: QPushButton = QPushButton("🔄")
+
         # Preset controls (initialized in _build_config_tab)
         self.preset_combo: QComboBox = QComboBox()
         self.save_preset_btn: QPushButton = QPushButton("Save")
@@ -906,13 +1000,34 @@ class BotGui(QMainWindow):
                 widget.setEditable(False)
                 widget.setMinimumWidth(150)
                 self.env_inputs[key] = widget
+                form.addRow(label, widget)
+            elif key == "TELEGRAM_CHANNEL":
+                # Special handling: editable combo with refresh button
+                self.channel_combo = QComboBox()
+                self.channel_combo.setEditable(True)
+                self.channel_combo.setMinimumWidth(200)
+                self.channel_combo.setPlaceholderText("Channel name or ID")
+                self.channel_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+                self.env_inputs[key] = self.channel_combo
+
+                self.channel_refresh_btn = QPushButton("🔄")
+                self.channel_refresh_btn.setFixedWidth(32)
+                self.channel_refresh_btn.setToolTip("Refresh channel list from Telegram")
+                self.channel_refresh_btn.clicked.connect(self._refresh_telegram_channels)
+
+                channel_row = QHBoxLayout()
+                channel_row.setSpacing(4)
+                channel_row.addWidget(self.channel_combo, stretch=1)
+                channel_row.addWidget(self.channel_refresh_btn)
+
+                form.addRow(label, channel_row)
             else:
                 widget = QLineEdit()
                 widget.setEchoMode(QLineEdit.EchoMode.Password if is_secret else QLineEdit.EchoMode.Normal)
                 widget.setPlaceholderText(label)
                 widget.setMinimumWidth(150)
                 self.env_inputs[key] = widget
-            form.addRow(label, widget)
+                form.addRow(label, widget)
 
         layout.addLayout(form)
         return container
@@ -1077,23 +1192,33 @@ class BotGui(QMainWindow):
         env_values = read_env_file(ENV_PATH)
         cache_values = load_cache(CACHE_PATH)
         merged = {**env_values, **cache_values}
+        self._populate_fields_from_values(merged)
+
+    def _populate_fields_from_values(self, values: dict[str, str]) -> None:
+        """Populate all input fields from a values dictionary."""
         for key, widget in self.env_inputs.items():
-            value = merged.get(key, "")
+            value = values.get(key, "")
             if key == "TRADING_STRATEGY":
                 value = value.lower() if value else STRATEGY_CHOICES[0]
-                combo = widget if isinstance(widget, QComboBox) else None
-                if combo is not None:
-                    idx = combo.findText(value)
-                    combo.setCurrentIndex(idx if idx >= 0 else 0)
-                continue
-            if isinstance(widget, QLineEdit):
+                if isinstance(widget, QComboBox):
+                    idx = widget.findText(value)
+                    widget.setCurrentIndex(idx if idx >= 0 else 0)
+            elif key == "TELEGRAM_CHANNEL":
+                self._set_channel_value(value)
+            elif isinstance(widget, QLineEdit):
                 widget.setText(value)
 
     def _current_values(self) -> dict[str, str]:
         values: dict[str, str] = {}
         for key, widget in self.env_inputs.items():
-            if isinstance(widget, QComboBox):
-                values[key] = widget.currentText().strip().lower()
+            if key == "TELEGRAM_CHANNEL":
+                values[key] = self._get_channel_value()
+            elif key == "TRADING_STRATEGY":
+                if isinstance(widget, QComboBox):
+                    values[key] = widget.currentText().strip().lower()
+            elif isinstance(widget, QComboBox):
+                # For editable combos that aren't TELEGRAM_CHANNEL
+                values[key] = widget.currentText().strip()
             else:
                 values[key] = widget.text().strip()
         return values
@@ -1106,20 +1231,120 @@ class BotGui(QMainWindow):
 
     def reload_env(self) -> None:
         env_values = read_env_file(ENV_PATH)
-        for key, widget in self.env_inputs.items():
-            value = env_values.get(key, "")
-            if isinstance(widget, QComboBox):
-                value = value.lower() if value else STRATEGY_CHOICES[0]
-                idx = widget.findText(value)
-                widget.setCurrentIndex(idx if idx >= 0 else 0)
-            else:
-                widget.setText(value)
+        self._populate_fields_from_values(env_values)
         QMessageBox.information(self, "Reloaded", "Reloaded values from .env.")
 
     def clear_cache(self) -> None:
         if CACHE_PATH.exists():
             CACHE_PATH.unlink()
         QMessageBox.information(self, "Cache cleared", "Cache file removed.")
+
+    # ---------- Channel Management ----------
+    def _refresh_telegram_channels(self) -> None:
+        """Fetch and populate the channel dropdown from Telegram."""
+        global CHANNEL_CHOICES
+
+        # Get current API credentials from form
+        api_id_str = ""
+        api_hash = ""
+        api_id_widget = self.env_inputs.get("TELEGRAM_API_ID")
+        api_hash_widget = self.env_inputs.get("TELEGRAM_API_HASH")
+
+        if isinstance(api_id_widget, QLineEdit):
+            api_id_str = api_id_widget.text().strip()
+        if isinstance(api_hash_widget, QLineEdit):
+            api_hash = api_hash_widget.text().strip()
+
+        try:
+            api_id = int(api_id_str) if api_id_str else 0
+        except ValueError:
+            api_id = 0
+
+        if api_id <= 0 or not api_hash:
+            QMessageBox.warning(
+                self,
+                "Missing Credentials",
+                "Please enter your Telegram API ID and API Hash first.",
+            )
+            return
+
+        if not SESSION_PATH.exists():
+            QMessageBox.warning(
+                self,
+                "No Session",
+                "No Telegram session found. Please start the bot first to authenticate.",
+            )
+            return
+
+        # Show loading state
+        self.channel_refresh_btn.setEnabled(False)
+        self.channel_refresh_btn.setText("...")
+        QApplication.processEvents()
+
+        try:
+            channels = fetch_telegram_channels(api_id, api_hash)
+            CHANNEL_CHOICES = channels
+
+            # Preserve current selection
+            current_value = self._get_channel_value()
+
+            # Update combo box
+            self.channel_combo.blockSignals(True)
+            self.channel_combo.clear()
+
+            for display_name, value in channels:
+                self.channel_combo.addItem(display_name, value)
+
+            # Restore selection
+            self._set_channel_value(current_value)
+            self.channel_combo.blockSignals(False)
+
+            if channels:
+                self.statusbar.showMessage(f"Loaded {len(channels)} channels", 3000)
+            else:
+                QMessageBox.information(
+                    self,
+                    "No Channels",
+                    "No channels found. Make sure you're a member of at least one channel or group.",
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to fetch channels: {e}")
+        finally:
+            self.channel_refresh_btn.setEnabled(True)
+            self.channel_refresh_btn.setText("🔄")
+
+    def _get_channel_value(self) -> str:
+        """Get the current channel value (ID or username) from the combo."""
+        # Check if an item is selected that has data
+        idx = self.channel_combo.currentIndex()
+        if idx >= 0:
+            data = self.channel_combo.itemData(idx)
+            if data:
+                return str(data)
+        # Fall back to the text (for manual entry)
+        return self.channel_combo.currentText().strip()
+
+    def _set_channel_value(self, value: str) -> None:
+        """Set the channel combo to match a value (ID or username)."""
+        if not value:
+            self.channel_combo.setCurrentIndex(-1)
+            self.channel_combo.setCurrentText("")
+            return
+
+        # First, try to find by item data (ID/username)
+        for i in range(self.channel_combo.count()):
+            if self.channel_combo.itemData(i) == value:
+                self.channel_combo.setCurrentIndex(i)
+                return
+
+        # Try to find by display text
+        idx = self.channel_combo.findText(value)
+        if idx >= 0:
+            self.channel_combo.setCurrentIndex(idx)
+            return
+
+        # Not found - set as custom text (manual entry)
+        self.channel_combo.setCurrentText(value)
 
     # ---------- Preset Management ----------
     def _refresh_preset_list(self) -> None:
@@ -1154,17 +1379,7 @@ class BotGui(QMainWindow):
         set_last_preset(name)
 
         # Populate fields with preset values
-        for key, widget in self.env_inputs.items():
-            value = values.get(key, "")
-            if key == "TRADING_STRATEGY":
-                value = value.lower() if value else STRATEGY_CHOICES[0]
-                combo = widget if isinstance(widget, QComboBox) else None
-                if combo is not None:
-                    idx = combo.findText(value)
-                    combo.setCurrentIndex(idx if idx >= 0 else 0)
-            elif isinstance(widget, QLineEdit):
-                widget.setText(value)
-
+        self._populate_fields_from_values(values)
         self._update_preset_buttons()
 
     def _save_current_preset(self) -> None:

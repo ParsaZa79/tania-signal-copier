@@ -1,22 +1,20 @@
 """
 Signal parser for the Telegram MT5 Signal Bot.
 
-This module uses Claude AI to parse and classify trading signals
+This module uses Groq AI to parse and classify trading signals
 from Telegram messages into structured TradeSignal objects.
 """
 
 import json
 import re
-from pathlib import Path
 
-from claude_agent_sdk import ClaudeAgentOptions, query
-from claude_agent_sdk.types import AssistantMessage, TextBlock
+from groq import AsyncGroq
 
 from tania_signal_copier.models import MessageType, OrderType, TradeSignal
 
 
 class SignalParser:
-    """Uses Claude AI to parse trading signals from various formats.
+    """Uses Groq AI to parse trading signals from various formats.
 
     This parser classifies incoming Telegram messages into 8 types
     and extracts structured trading information.
@@ -32,7 +30,7 @@ class SignalParser:
         - NOT_TRADING: Non-trading content
     """
 
-    PARSER_PROMPT = """Analyze this forex/gold trading message and classify it.
+    SYSTEM_PROMPT = """Analyze this forex/gold trading message and classify it.
 
 CLASSIFICATION RULES:
 1. NEW_SIGNAL_COMPLETE: Contains symbol + direction (buy/sell) + entry price + stop loss + at least one take profit
@@ -96,19 +94,41 @@ Return JSON:
 
 Note: The "actions" array is ONLY used for compound_action message_type. For other types, leave it empty [].
 
-Message:
-```
-{message}
-```
-
 Return ONLY valid JSON, no explanation."""
 
-    def __init__(self) -> None:
-        """Initialize parser.
+    CORRECTION_SYSTEM_PROMPT = """You are analyzing a CORRECTION message for a trading signal.
 
-        Uses Claude Code subscription auth (no API key needed).
-        """
-        pass
+The original signal had these values:
+- Entry Price: {original_entry}
+- Stop Loss: {original_sl}
+- Take Profits: {original_tps}
+- Symbol: {symbol}
+- Order Type: {order_type}
+
+Common shorthand correction patterns traders use:
+- "44*" or "*44" = The significant digits should be 44xx (e.g., 4146 was typo, meant 4446)
+- "SL 2640" or "sl:2640" = New stop loss is 2640
+- "TP 2700" or "tp:2700" = New take profit is 2700
+- Just a number like "4446" = Usually correcting the most recently mentioned or most likely wrong value
+- "44" (two digits) = Replace the significant digits in the wrong value
+
+Analyze the correction and determine what value(s) the trader meant to fix.
+Consider which original value the correction most likely refers to based on digit patterns.
+
+Return JSON:
+{{
+    "corrected_entry": number or null,
+    "corrected_stop_loss": number or null,
+    "corrected_take_profits": [numbers] or null,
+    "confidence": 0-1,
+    "interpretation": "brief explanation of what was corrected and why"
+}}
+
+Return ONLY valid JSON, no explanation outside the JSON."""
+
+    def __init__(self) -> None:
+        """Initialize parser with Groq async client."""
+        self.client = AsyncGroq()  # Reads GROQ_API_KEY from environment
 
     def _strip_markdown(self, text: str) -> str:
         """Strip Telegram markdown formatting from text.
@@ -141,49 +161,51 @@ Return ONLY valid JSON, no explanation."""
         Returns:
             TradeSignal if successfully parsed, None for non-trading messages
         """
-        # Strip markdown formatting that can corrupt number parsing
         cleaned_message = self._strip_markdown(message)
-        prompt = self.PARSER_PROMPT.format(message=cleaned_message)
 
         try:
-            response_text = await self._query_claude(prompt)
+            response_text = await self._query_groq(self.SYSTEM_PROMPT, cleaned_message)
             return self._parse_response(response_text, message)
         except Exception as e:
             print(f"Error parsing signal: {e}")
             return None
 
-    async def _query_claude(self, prompt: str) -> str:
-        """Query Claude AI and get the response text.
+    async def _query_groq(self, system_prompt: str, user_message: str) -> str:
+        """Query Groq AI and get the response text.
 
         Args:
-            prompt: The prompt to send to Claude
+            system_prompt: The system prompt with instructions
+            user_message: The user message to analyze
 
         Returns:
-            The raw response text from Claude
+            The raw response text from Groq
         """
-        project_dir = (Path(__file__).resolve().parents[3] / "bot-playground").resolve()
-        print(f"Using project dir: {project_dir}")
-        options = ClaudeAgentOptions(
-            cwd=project_dir, # Runs in this directory
-            model="opus", # Use Haiku model for the fastest response
-            allowed_tools=[],  # No tools needed for parsing
-            max_turns=1,  # Single turn for parsing
+        completion = await self.client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=1,
+            max_completion_tokens=8192,
+            top_p=1,
+            reasoning_effort="medium",
+            stream=True,
         )
 
         result_text = ""
-        async for msg in query(prompt=prompt, options=options):
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock):
-                        result_text += block.text
+        async for chunk in completion:
+            content = chunk.choices[0].delta.content
+            if content:
+                result_text += content
 
         return result_text.strip()
 
     def _parse_response(self, response_text: str, original_message: str) -> TradeSignal | None:
-        """Parse Claude's JSON response into a TradeSignal.
+        """Parse Groq's JSON response into a TradeSignal.
 
         Args:
-            response_text: The raw response from Claude
+            response_text: The raw response from Groq
             original_message: The original Telegram message for context
 
         Returns:
@@ -239,7 +261,11 @@ Return ONLY valid JSON, no explanation."""
             return MessageType.NOT_TRADING
 
     def _check_completeness(self, data: dict, msg_type: MessageType) -> bool:
-        """Check if a new signal has all required fields."""
+        """Check if a new signal has all required fields.
+
+        Market orders (buy/sell): Only need SL and TP
+        Pending orders (limit/stop): Also need entry_price
+        """
         if msg_type not in [MessageType.NEW_SIGNAL_COMPLETE, MessageType.NEW_SIGNAL_INCOMPLETE]:
             return True
 
@@ -247,7 +273,14 @@ Return ONLY valid JSON, no explanation."""
         has_tp = len(data.get("take_profits", [])) > 0
         has_entry = data.get("entry_price") is not None
 
-        return has_sl and has_tp and has_entry
+        order_type = data.get("order_type", "")
+        is_pending_order = order_type in ["buy_limit", "sell_limit", "buy_stop", "sell_stop"]
+
+        if is_pending_order:
+            return has_sl and has_tp and has_entry
+        else:
+            # Market orders only need SL and TP
+            return has_sl and has_tp
 
     def _get_order_type(self, data: dict) -> OrderType:
         """Extract order type from parsed data with fallback."""
@@ -258,38 +291,6 @@ Return ONLY valid JSON, no explanation."""
             except ValueError:
                 pass
         return OrderType.BUY  # Default fallback
-
-    CORRECTION_PROMPT = """You are analyzing a CORRECTION message for a trading signal.
-
-The original signal had these values:
-- Entry Price: {original_entry}
-- Stop Loss: {original_sl}
-- Take Profits: {original_tps}
-- Symbol: {symbol}
-- Order Type: {order_type}
-
-The correction message is: "{correction_text}"
-
-Common shorthand correction patterns traders use:
-- "44*" or "*44" = The significant digits should be 44xx (e.g., 4146 was typo, meant 4446)
-- "SL 2640" or "sl:2640" = New stop loss is 2640
-- "TP 2700" or "tp:2700" = New take profit is 2700
-- Just a number like "4446" = Usually correcting the most recently mentioned or most likely wrong value
-- "44" (two digits) = Replace the significant digits in the wrong value
-
-Analyze the correction and determine what value(s) the trader meant to fix.
-Consider which original value the correction most likely refers to based on digit patterns.
-
-Return JSON:
-{{
-    "corrected_entry": number or null,
-    "corrected_stop_loss": number or null,
-    "corrected_take_profits": [numbers] or null,
-    "confidence": 0-1,
-    "interpretation": "brief explanation of what was corrected and why"
-}}
-
-Return ONLY valid JSON, no explanation outside the JSON."""
 
     async def parse_correction(
         self,
@@ -313,8 +314,7 @@ Return ONLY valid JSON, no explanation outside the JSON."""
         Returns:
             Dict with corrected values, or None if parsing failed
         """
-        prompt = self.CORRECTION_PROMPT.format(
-            correction_text=correction_text,
+        system_prompt = self.CORRECTION_SYSTEM_PROMPT.format(
             original_entry=original_entry,
             original_sl=original_sl,
             original_tps=original_tps,
@@ -323,17 +323,17 @@ Return ONLY valid JSON, no explanation outside the JSON."""
         )
 
         try:
-            response_text = await self._query_claude(prompt)
+            response_text = await self._query_groq(system_prompt, correction_text)
             return self._parse_correction_response(response_text)
         except Exception as e:
             print(f"Error parsing correction: {e}")
             return None
 
     def _parse_correction_response(self, response_text: str) -> dict | None:
-        """Parse Claude's JSON response for a correction.
+        """Parse Groq's JSON response for a correction.
 
         Args:
-            response_text: The raw response from Claude
+            response_text: The raw response from Groq
 
         Returns:
             Dict with corrected values, or None if invalid

@@ -178,6 +178,8 @@ class TelegramMT5Bot:
         self._pending_timeouts: dict[int, asyncio.Task] = {}
         # TP verification uses (msg_id, ticket) tuples as keys
         self._tp_verification_timeouts: dict[tuple[int, int], asyncio.Task] = {}
+        # Pending edits cache for race condition handling (edit arrives while parsing original)
+        self._pending_edits: dict[int, str] = {}  # msg_id -> edited text
 
         # Trade log for history
         self.trade_log: list[dict] = []
@@ -383,7 +385,9 @@ class TelegramMT5Bot:
         # Safety check 1: Do we have a position for this message?
         dual = self.state.get_dual_position_by_msg_id(msg_id)
         if dual is None:
-            print("No tracked position for this message, ignoring edit.")
+            # Store edit for later - might be mid-processing the original message
+            self._pending_edits[msg_id] = text
+            print(f"No position yet for msg {msg_id}, storing edit for later processing")
             return
 
         # Safety check 2: Is position still open?
@@ -646,16 +650,31 @@ class TelegramMT5Bot:
         if any_success:
             self.state.save()
 
-            # Start timeout if incomplete (for all positions)
+            # Start timeout if incomplete (for all positions) - only if timeout is enabled
             if not is_complete:
-                # Use scalp ticket for timeout (any ticket works since they're linked)
-                scalp_result = results.get("scalp") or results.get("single")
-                if scalp_result and scalp_result.get("success"):
-                    await self._start_timeout(msg_id, scalp_result["ticket"])
-                    timeout_minutes = self._config.trading.incomplete_signal_timeout // 60
-                    print(f"Started {timeout_minutes}-minutes timeout for incomplete signal")
+                timeout_seconds = self._config.trading.incomplete_signal_timeout
+                if timeout_seconds > 0:
+                    # Use scalp ticket for timeout (any ticket works since they're linked)
+                    scalp_result = results.get("scalp") or results.get("single")
+                    if scalp_result and scalp_result.get("success"):
+                        await self._start_timeout(msg_id, scalp_result["ticket"])
+                        print(f"Started {timeout_seconds // 60}-minute timeout for incomplete signal")
+                else:
+                    print("Timeout disabled - signal will stay open until completed via follow-up message")
 
             self._record_trade(signal, results)
+
+            # Check if we have a pending edit for this message (race condition fix)
+            # This handles the case where the channel edits the message to add entry/SL/TP
+            # WHILE we were still parsing the original incomplete signal
+            if msg_id in self._pending_edits:
+                edited_text = self._pending_edits.pop(msg_id)
+                print(f"Found pending edit for msg {msg_id}, applying now...")
+                dual = self.state.get_dual_position_by_msg_id(msg_id)
+                if dual and not dual.is_closed:
+                    new_signal = await self.parser.parse_signal(edited_text)
+                    if new_signal:
+                        await self._apply_edit_changes(msg_id, dual, new_signal, edited_text)
 
     async def _complete_pending_position(
         self,
@@ -1264,6 +1283,10 @@ class TelegramMT5Bot:
         """Start timeout for incomplete signal - closes ALL positions in the dual."""
         _ = ticket  # Kept for API compatibility
         timeout_seconds = self._config.trading.incomplete_signal_timeout
+
+        # Skip if timeout is disabled
+        if timeout_seconds <= 0:
+            return
 
         async def timeout_handler() -> None:
             await asyncio.sleep(timeout_seconds)

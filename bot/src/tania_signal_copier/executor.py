@@ -423,10 +423,18 @@ class MT5Executor:
         is_buy = signal.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP]
         exec_price = tick.ask if is_buy else tick.bid
 
+        # Find a valid TP (trying each one, with 1:1 RR fallback)
+        tp_to_use = None
+        if signal.take_profits:
+            tp_to_use, tp_warning = self.find_valid_tp(
+                is_buy, exec_price, signal.take_profits, signal.stop_loss
+            )
+            if tp_warning:
+                print(f"    [WARNING] {tp_warning}")
+
         # Validate SL/TP before building order
-        tp_to_validate = signal.take_profits[0] if signal.take_profits else None
         validated_sl, validated_tp, warnings = self.validate_sl_tp(
-            is_buy, exec_price, signal.stop_loss, tp_to_validate
+            is_buy, exec_price, signal.stop_loss, tp_to_use
         )
 
         # Log any validation warnings
@@ -993,6 +1001,42 @@ class MT5Executor:
                 validated_sl = None
 
         return validated_sl, validated_tp, warnings
+
+    def find_valid_tp(
+        self,
+        is_buy: bool,
+        entry_price: float,
+        take_profits: list[float],
+        stop_loss: float | None,
+    ) -> tuple[float | None, str | None]:
+        """Find first valid TP or calculate 1:1 RR fallback.
+
+        Iterates through TPs to find one that's valid for the direction.
+        If all TPs are already breached (price moved past them), falls back
+        to a 1:1 risk-reward TP based on the stop loss distance.
+
+        Args:
+            is_buy: True for BUY orders, False for SELL
+            entry_price: The execution/entry price
+            take_profits: List of take profit prices (TP1, TP2, TP3...)
+            stop_loss: The stop loss price (used for 1:1 RR fallback)
+
+        Returns:
+            Tuple of (valid_tp, warning_message). Warning is None if TP1 is valid.
+        """
+        for i, tp in enumerate(take_profits):
+            is_valid = (tp > entry_price) if is_buy else (tp < entry_price)
+            if is_valid:
+                warning = f"TP1-TP{i} breached, using TP{i+1}={tp}" if i > 0 else None
+                return tp, warning
+
+        # All TPs invalid - use 1:1 RR fallback
+        if stop_loss is not None:
+            sl_distance = abs(entry_price - stop_loss)
+            fallback_tp = entry_price + sl_distance if is_buy else entry_price - sl_distance
+            return fallback_tp, f"All TPs breached, using 1:1 RR fallback TP={fallback_tp:.2f}"
+
+        return None, "All TPs invalid, no SL for fallback - opening without TP"
 
     @with_reconnect
     def get_current_price(self, symbol: str, for_buy: bool) -> float | None:
