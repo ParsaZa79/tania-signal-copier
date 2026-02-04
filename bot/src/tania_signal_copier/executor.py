@@ -397,9 +397,13 @@ class MT5Executor:
         if signal.stop_loss is None or signal.stop_loss == 0.0:
             return {"success": False, "error": "Stop loss required for all positions"}
 
-        # Resolve symbol
+        # Resolve symbol - try broker symbol first, then fall back to original signal symbol
         symbol_to_find = broker_symbol or signal.symbol
         sym_data = self.get_symbol_info(symbol_to_find)
+        if not sym_data and broker_symbol and broker_symbol != signal.symbol:
+            # Broker symbol not found, try original signal symbol
+            print(f"    [INFO] Broker symbol {broker_symbol} not found, trying {signal.symbol}")
+            sym_data = self.get_symbol_info(signal.symbol)
         if not sym_data:
             return {"success": False, "error": f"Symbol {symbol_to_find} not found"}
 

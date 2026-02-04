@@ -87,7 +87,7 @@ class SymbolConfig:
     """Symbol filtering and mapping configuration."""
 
     allowed_symbols: list[str] = field(default_factory=lambda: ["XAUUSD"])
-    symbol_map: dict[str, str] = field(default_factory=lambda: {"XAUUSD": "XAUUSDb"})
+    symbol_map: dict[str, str] = field(default_factory=lambda: {"XAUUSD": "XAUUSD"})
 
     def is_allowed(self, symbol: str) -> bool:
         """Check if a symbol is in the allowed list."""

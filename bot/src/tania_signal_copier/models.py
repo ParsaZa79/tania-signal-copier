@@ -60,6 +60,54 @@ class TradeActionType(Enum):
     VERIFY_CLOSED = "verify_closed"
 
 
+class ActionType(Enum):
+    """Parsed action types from signal messages.
+
+    These represent the distinct actions that can be extracted from
+    a single Telegram message. A message may contain multiple actions.
+    """
+
+    NEW_SIGNAL = "new_signal"  # Open new position/pending order
+    MODIFICATION = "modification"  # Change SL/TP to specific price
+    MOVE_SL_TO_ENTRY = "move_sl_to_entry"  # Move SL to breakeven
+    PARTIAL_CLOSE = "partial_close"  # Close X% of position
+    FULL_CLOSE = "full_close"  # Close entire position
+    TP_HIT = "tp_hit"  # TP was hit (triggers strategy)
+    RE_ENTRY = "re_entry"  # Close losing position and re-enter
+
+
+@dataclass
+class ParsedAction:
+    """A single action parsed from a signal message.
+
+    Each ParsedAction represents one discrete operation to be executed.
+    A single Telegram message may produce multiple ParsedAction objects.
+    """
+
+    action_type: ActionType
+
+    # New signal fields
+    order_type: OrderType | None = None
+    entry_price: float | None = None
+    entry_price_max: float | None = None
+    stop_loss: float | None = None
+    take_profits: list[float] = field(default_factory=list)
+
+    # Modification fields
+    new_stop_loss: float | None = None
+    new_take_profit: float | None = None
+
+    # Close fields
+    close_percentage: int | None = None
+
+    # TP hit fields
+    tp_hit_number: int | None = None
+
+    # Re-entry fields
+    re_entry_price: float | None = None
+    re_entry_price_max: float | None = None
+
+
 @dataclass
 class TradeSignal:
     """Parsed trade signal from Telegram message.

@@ -525,10 +525,55 @@ class TelegramMT5Bot:
         reply_to_msg_id: int | None,
         signal: TradeSignal,
     ) -> None:
-        """Route signal to the appropriate handler based on message type."""
+        """Route signal by processing all actions in sequence.
+
+        Actions are processed in a specific order for safety:
+        1. Modifications (protect existing positions first)
+        2. Move SL to entry (secure profits)
+        3. Partial close (take profits)
+        4. Full close (exit completely)
+        5. TP hit notifications (update state)
+        6. New signals (open new positions last)
+        7. Re-entry (close + reopen)
+        """
         # Resolve target for position-related actions
         target_msg_id = self._resolve_target_msg_id(reply_to_msg_id)
 
+        # Get actions from signal
+        actions = signal.actions or []
+
+        # If no actions but we have a message_type, use legacy routing
+        if not actions:
+            await self._route_signal_legacy(msg_id, target_msg_id, signal)
+            return
+
+        # Sort actions by processing priority
+        action_priority = {
+            "modification": 1,
+            "move_sl_to_entry": 2,
+            "partial_close": 3,
+            "full_close": 4,
+            "tp_hit": 5,
+            "new_signal": 6,
+            "re_entry": 7,
+        }
+        sorted_actions = sorted(
+            actions,
+            key=lambda a: action_priority.get(a.get("action_type", ""), 99)
+        )
+
+        print(f"Processing {len(sorted_actions)} action(s)...")
+
+        for action in sorted_actions:
+            await self._execute_action(action, msg_id, target_msg_id, signal)
+
+    async def _route_signal_legacy(
+        self,
+        msg_id: int,
+        target_msg_id: int | None,
+        signal: TradeSignal,
+    ) -> None:
+        """Legacy routing based on message_type (fallback for old format)."""
         handlers = {
             MessageType.NEW_SIGNAL_COMPLETE: lambda: self._handle_new_signal(msg_id, signal, is_complete=True),
             MessageType.NEW_SIGNAL_INCOMPLETE: lambda: self._handle_new_signal(msg_id, signal, is_complete=False),
@@ -543,6 +588,413 @@ class TelegramMT5Bot:
         handler = handlers.get(signal.message_type)
         if handler:
             await handler()
+
+    async def _execute_action(
+        self,
+        action: dict,
+        msg_id: int,
+        target_msg_id: int | None,
+        signal: TradeSignal,
+    ) -> None:
+        """Execute a single action from the actions array."""
+        action_type = action.get("action_type")
+
+        handlers = {
+            "new_signal": lambda: self._handle_new_signal_action(msg_id, action, signal),
+            "modification": lambda: self._handle_modification_action(target_msg_id, action),
+            "move_sl_to_entry": lambda: self._handle_move_sl_to_entry_action(target_msg_id),
+            "partial_close": lambda: self._handle_partial_close_action(target_msg_id, action),
+            "full_close": lambda: self._handle_full_close_action(target_msg_id),
+            "tp_hit": lambda: self._handle_tp_hit_action(target_msg_id, action, signal),
+            "re_entry": lambda: self._handle_re_entry_action(msg_id, target_msg_id, action, signal),
+        }
+
+        handler = handlers.get(action_type) if action_type else None
+        if handler:
+            print(f"  Executing action: {action_type}")
+            await handler()
+        else:
+            print(f"  Unknown action type: {action_type}")
+
+    async def _handle_new_signal_action(
+        self,
+        msg_id: int,
+        action: dict,
+        signal: TradeSignal,
+    ) -> None:
+        """Handle new_signal action from the actions array."""
+        # Build a TradeSignal from the action data
+        order_type_str = action.get("order_type")
+        try:
+            order_type = OrderType(order_type_str) if order_type_str else signal.order_type
+        except ValueError:
+            order_type = OrderType.BUY
+
+        take_profits = action.get("take_profits", []) or signal.take_profits
+        stop_loss = action.get("stop_loss") or signal.stop_loss
+
+        # Determine completeness
+        has_sl = stop_loss is not None
+        has_tp = len(take_profits) > 0
+        has_entry = action.get("entry_price") is not None
+        is_pending = order_type.value in ["buy_limit", "sell_limit", "buy_stop", "sell_stop"]
+
+        if is_pending:
+            is_complete = has_sl and has_tp and has_entry
+        else:
+            is_complete = has_sl and has_tp
+
+        action_signal = TradeSignal(
+            symbol=signal.symbol or action.get("symbol", ""),
+            order_type=order_type,
+            entry_price=action.get("entry_price"),
+            stop_loss=stop_loss,
+            take_profits=take_profits,
+            lot_size=signal.lot_size,
+            comment=signal.comment,
+            confidence=signal.confidence,
+            message_type=MessageType.NEW_SIGNAL_COMPLETE if is_complete else MessageType.NEW_SIGNAL_INCOMPLETE,
+            is_complete=is_complete,
+        )
+
+        await self._handle_new_signal(msg_id, action_signal, is_complete=is_complete)
+
+    async def _handle_modification_action(
+        self,
+        target_msg_id: int | None,
+        action: dict,
+    ) -> None:
+        """Handle modification action (specific SL/TP price change)."""
+        if target_msg_id is None:
+            print("    No target position found for modification")
+            return
+
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"    Dual position for msg {target_msg_id} not found")
+            return
+
+        new_sl = action.get("new_stop_loss")
+        new_tp = action.get("new_take_profit")
+
+        if new_sl is None and new_tp is None:
+            print("    No SL or TP to modify")
+            return
+
+        # Cancel timeout if position was pending
+        self._cancel_timeout(target_msg_id)
+
+        # Modify all positions in the dual
+        for pos in dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                continue
+
+            # Determine TP based on role
+            effective_tp = new_tp
+            if effective_tp is None and pos.take_profits:
+                effective_tp = pos.take_profits[0]
+
+            effective_sl = new_sl or pos.stop_loss
+            result = self.executor.modify_position(pos.mt5_ticket, sl=effective_sl, tp=effective_tp)
+
+            if result["success"]:
+                if new_sl:
+                    pos.stop_loss = new_sl
+                pos.is_complete = True
+                pos.status = PositionStatus.OPEN
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket} modified: SL={effective_sl}, TP={effective_tp}")
+            else:
+                print(f"    {pos.role.value.upper()} modification failed: {result['error']}")
+
+        self.state.save()
+
+    async def _handle_move_sl_to_entry_action(
+        self,
+        target_msg_id: int | None,
+    ) -> None:
+        """Handle move_sl_to_entry action (move SL to breakeven)."""
+        if target_msg_id is None:
+            print("    No target position found for move SL to entry")
+            return
+
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"    Dual position for msg {target_msg_id} not found")
+            return
+
+        # Move SL to entry for all open positions
+        for pos in dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                continue
+
+            # Get actual entry price from MT5
+            mt5_pos = self.executor.get_position(pos.mt5_ticket)
+            if mt5_pos is None:
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Already closed, skipping")
+                pos.status = PositionStatus.CLOSED
+                continue
+
+            entry_price = mt5_pos.get("price_open", pos.entry_price)
+            result = self.executor.move_to_breakeven(pos.mt5_ticket, entry_price)
+
+            if result["success"]:
+                pos.stop_loss = entry_price
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: SL moved to entry {entry_price}")
+            else:
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Failed - {result['error']}")
+
+        self.state.save()
+
+    async def _handle_partial_close_action(
+        self,
+        target_msg_id: int | None,
+        action: dict,
+    ) -> None:
+        """Handle partial_close action."""
+        close_percentage = action.get("close_percentage")
+        if close_percentage is None:
+            # Default to 50% for "close half" if not specified
+            close_percentage = 50
+
+        print(f"    Partial close: {close_percentage}%")
+
+        if target_msg_id is None:
+            print("    No target position found for partial close")
+            return
+
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"    Dual position for msg {target_msg_id} not found")
+            return
+
+        if dual.is_closed:
+            print("    All positions already closed")
+            return
+
+        # Apply partial close to all positions
+        for pos in dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                continue
+
+            result = self.executor.partial_close(pos.mt5_ticket, close_percentage)
+            if result["success"]:
+                pos.lot_size = result["remaining_volume"]
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Closed {result['closed_volume']} lots")
+            else:
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Failed - {result['error']}")
+
+        self.state.save()
+
+    async def _handle_full_close_action(
+        self,
+        target_msg_id: int | None,
+    ) -> None:
+        """Handle full_close action."""
+        if target_msg_id is None:
+            print("    No target position found to close")
+            return
+
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"    Dual position for msg {target_msg_id} not found")
+            return
+
+        if dual.is_closed:
+            print("    All positions already closed")
+            return
+
+        # Close all positions
+        any_closed = False
+        for pos in dual.all_positions:
+            if pos.status == PositionStatus.CLOSED:
+                continue
+
+            result = self.executor.close_position(pos.mt5_ticket)
+            if result["success"]:
+                pos.status = PositionStatus.CLOSED
+                any_closed = True
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Closed at {result['closed_at']}")
+            else:
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Failed - {result['error']}")
+
+        if any_closed:
+            self._cancel_timeout(target_msg_id)
+            self.state.save()
+
+    async def _handle_tp_hit_action(
+        self,
+        target_msg_id: int | None,
+        action: dict,
+        signal: TradeSignal,
+    ) -> None:
+        """Handle tp_hit action using the strategy."""
+        tp_hit_number = action.get("tp_hit_number")
+        print(f"    TP hit notification (TP={tp_hit_number})")
+
+        # Create a signal with tp_hit_number for strategy
+        tp_signal = TradeSignal(
+            symbol=signal.symbol,
+            order_type=signal.order_type,
+            entry_price=signal.entry_price,
+            stop_loss=signal.stop_loss,
+            take_profits=signal.take_profits,
+            confidence=signal.confidence,
+            message_type=MessageType.PROFIT_NOTIFICATION,
+            tp_hit_number=tp_hit_number,
+            move_sl_to_entry=False,  # Handled by separate action
+            comment=signal.comment,
+        )
+
+        # Check if strategy says to ignore this message
+        if self.strategy.should_ignore_profit_message(tp_signal):
+            print("    Informational profit message (no TP hit) - ignoring")
+            return
+
+        if target_msg_id is None:
+            print("    No target position found")
+            return
+
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print("    Target dual position not found in state")
+            return
+
+        if dual.is_closed:
+            print("    All positions already closed")
+            return
+
+        # Get actions from strategy
+        strategy_actions = self.strategy.on_tp_hit(tp_hit_number, dual, tp_signal)
+
+        if not strategy_actions:
+            print("    Strategy returned no actions")
+            return
+
+        # Execute each strategy action
+        for strategy_action in strategy_actions:
+            pos = dual.get_by_role(strategy_action.role)
+            if pos is None or pos.status == PositionStatus.CLOSED:
+                continue
+
+            if strategy_action.action_type == TradeActionType.VERIFY_CLOSED:
+                mt5_pos = self.executor.get_position(pos.mt5_ticket)
+                if mt5_pos is None:
+                    print(f"    {strategy_action.role.value.upper()} {pos.mt5_ticket}: Confirmed closed on MT5")
+                    pos.status = PositionStatus.CLOSED
+                    if tp_hit_number:
+                        pos.tps_hit.append(tp_hit_number)
+                else:
+                    print(f"    {strategy_action.role.value.upper()} {pos.mt5_ticket}: Still open, scheduling verification")
+                    await self._start_tp_verification_timeout(target_msg_id, pos.mt5_ticket)
+
+            elif strategy_action.action_type == TradeActionType.MOVE_SL_TO_BREAKEVEN:
+                mt5_pos = self.executor.get_position(pos.mt5_ticket)
+                if mt5_pos is None:
+                    print(f"    {strategy_action.role.value.upper()} {pos.mt5_ticket}: Already closed")
+                    pos.status = PositionStatus.CLOSED
+                else:
+                    entry_price = strategy_action.value if strategy_action.value else pos.entry_price
+                    result = self.executor.move_to_breakeven(pos.mt5_ticket, entry_price)
+                    if result["success"]:
+                        pos.stop_loss = entry_price
+                        if tp_hit_number:
+                            pos.tps_hit.append(tp_hit_number)
+                        print(f"    {strategy_action.role.value.upper()}: SL moved to breakeven {entry_price}")
+                    else:
+                        print(f"    {strategy_action.role.value.upper()}: Failed - {result['error']}")
+
+            elif strategy_action.action_type == TradeActionType.CLOSE:
+                result = self.executor.close_position(pos.mt5_ticket)
+                if result["success"]:
+                    pos.status = PositionStatus.CLOSED
+                    print(f"    {strategy_action.role.value.upper()} {pos.mt5_ticket}: Closed")
+                else:
+                    print(f"    {strategy_action.role.value.upper()}: Failed - {result['error']}")
+
+        self.state.save()
+
+    async def _handle_re_entry_action(
+        self,
+        new_msg_id: int,
+        target_msg_id: int | None,
+        action: dict,
+        signal: TradeSignal,
+    ) -> None:
+        """Handle re_entry action (close losing position and re-enter)."""
+        if target_msg_id is None:
+            print("    No target position found for re-entry")
+            return
+
+        dual = self.state.get_dual_position_by_msg_id(target_msg_id)
+        if dual is None:
+            print(f"    Dual position for msg {target_msg_id} not found")
+            return
+
+        # Get all open positions
+        open_positions = [
+            pos for pos in dual.all_positions
+            if pos.status != PositionStatus.CLOSED
+        ]
+
+        if not open_positions:
+            print("    All positions are already closed")
+            return
+
+        # Check if ANY position is in loss - only then do we re-enter
+        any_in_loss = any(
+            not self.executor.is_position_profitable(pos.mt5_ticket)
+            for pos in open_positions
+        )
+
+        if not any_in_loss:
+            tickets = [pos.mt5_ticket for pos in open_positions]
+            print(f"    All positions {tickets} are in profit, ignoring re-entry")
+            return
+
+        print(f"    Found {len(open_positions)} open position(s), processing re-entry...")
+
+        # Close ALL open positions
+        any_closed = False
+        ref_pos = None
+        for pos in open_positions:
+            close_result = self.executor.close_position(pos.mt5_ticket)
+            if close_result["success"]:
+                pos.status = PositionStatus.CLOSED
+                any_closed = True
+                if ref_pos is None:
+                    ref_pos = pos
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Closed at {close_result['closed_at']}")
+            else:
+                print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Failed - {close_result['error']}")
+
+        if not any_closed or ref_pos is None:
+            print("    Failed to close any positions, aborting re-entry")
+            return
+
+        self._cancel_timeout(target_msg_id)
+        self.state.save()
+
+        # Build re-entry signal from action data
+        re_entry_sl = action.get("stop_loss") or signal.stop_loss or ref_pos.stop_loss
+
+        if re_entry_sl is None or re_entry_sl == 0.0:
+            print("    CRITICAL: No stop loss available for re-entry, aborting")
+            return
+
+        re_entry_signal = TradeSignal(
+            symbol=signal.symbol or ref_pos.symbol,
+            order_type=ref_pos.order_type,  # Keep same direction
+            entry_price=action.get("re_entry_price") or action.get("entry_price"),
+            stop_loss=re_entry_sl,
+            take_profits=ref_pos.take_profits,  # Keep original TPs
+            lot_size=signal.lot_size,
+            comment=signal.comment,
+            confidence=signal.confidence,
+            message_type=MessageType.RE_ENTRY,
+            is_complete=True,
+        )
+
+        await self._handle_new_signal(new_msg_id, re_entry_signal, is_complete=True)
 
     async def _handle_new_signal(
         self,

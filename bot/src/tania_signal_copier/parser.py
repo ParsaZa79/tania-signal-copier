@@ -10,7 +10,7 @@ import re
 
 from groq import AsyncGroq
 
-from tania_signal_copier.models import MessageType, OrderType, TradeSignal
+from tania_signal_copier.models import ActionType, MessageType, OrderType, ParsedAction, TradeSignal
 
 
 class SignalParser:
@@ -30,69 +30,61 @@ class SignalParser:
         - NOT_TRADING: Non-trading content
     """
 
-    SYSTEM_PROMPT = """Analyze this forex/gold trading message and classify it.
+    SYSTEM_PROMPT = """Analyze this forex/gold trading message and extract ALL actions.
 
-CLASSIFICATION RULES:
-1. NEW_SIGNAL_COMPLETE: Contains symbol + direction (buy/sell) + entry price + stop loss + at least one take profit
-2. NEW_SIGNAL_INCOMPLETE: Contains symbol + direction but MISSING one or more of: entry price, stop loss, take profit
-3. MODIFICATION: Updates SL/TP for an existing trade (often says "move SL to...", "update SL/TP", "new SL")
-4. RE_ENTRY: Provides new entry price/range and SL for the same symbol (contains "re-entry", "re entry", or new entry levels as reply). IMPORTANT: Put the stop loss in "stop_loss" field (NOT new_stop_loss) for RE_ENTRY signals.
-5. PROFIT_NOTIFICATION: Reports TP hit, pips profit, trade result.
-   CRITICAL - "move_sl_to_entry", "tp_hit_number", and "new_stop_loss" rules:
-   - "tp_hit_number": ONLY set if message EXPLICITLY confirms a TP was hit (e.g., "TP1 hit", "First target reached", "TP2 ✅", "Target 1 done"). Otherwise null.
-   - "move_sl_to_entry": true ONLY if:
-     (a) A specific TP is CONFIRMED hit in the message, OR
-     (b) Explicit instruction like "move SL to entry", "SL to breakeven", "secure at entry"
-   - "move_sl_to_entry": false for:
-     (a) "Book some profits", "Secure profits", "Take some profits" - these are SUGGESTIONS to manually close partial, NOT instructions to move SL
-     (b) Pips running messages like "+50 pips", "35 pips profit running" - just informational
-     (c) Any message that does NOT explicitly confirm a TP hit or say "move SL"
-   - "new_stop_loss": If message contains "Move SL to XXXX" or "SL to XXXX" with a specific price, extract that price as new_stop_loss. This takes priority over move_sl_to_entry.
-6. CLOSE_SIGNAL: Explicitly says to close a position (e.g., "close gold", "exit trade", "close all")
-7. PARTIAL_CLOSE: Instructs to close a percentage of the position (e.g., "Close 70% of the trade", "Close 50%", "close half"). Extract the percentage value (e.g., 70 for "Close 70%", 50 for "close half").
-8. COMPOUND_ACTION: Contains MULTIPLE distinct actions in ONE message (e.g., "Add Sell-Limit..." AND "Update SL to..."). Use this when a message contains BOTH a new pending order AND a modification to an existing position.
-9. NOT_TRADING: Advertisements, announcements, greetings, or non-trading content
+IMPORTANT: A message can contain MULTIPLE independent actions. Always return ALL actions in the "actions" array.
 
-For COMPOUND_ACTION, return an "actions" array with each action separately identified.
+ACTION TYPES:
+1. "new_signal" - Open new position/pending order (contains symbol + direction + usually entry/SL/TPs)
+2. "modification" - Change SL/TP to specific price (e.g., "move SL to 2650", "new SL 2640")
+3. "move_sl_to_entry" - Move SL to breakeven/entry (e.g., "SL to entry", "secure at breakeven")
+4. "partial_close" - Close X% of position (e.g., "close half", "close 70%")
+5. "full_close" - Close entire position (e.g., "close gold", "exit trade")
+6. "tp_hit" - TP was hit notification (e.g., "TP1 hit", "first target reached")
+7. "re_entry" - Close losing position and re-enter (contains "re-entry" + new entry/SL)
 
-ORDER TYPE RULES (CRITICAL):
-- "buy" or "sell" = MARKET orders (execute immediately at current price). Use these for signals like "BUY GOLD @", "SELL XAUUSD @", etc. The entry price in these signals is just a reference zone, NOT a pending order trigger.
-- "buy_limit", "sell_limit", "buy_stop", "sell_stop" = PENDING orders. ONLY use these if the message EXPLICITLY contains the words "limit" or "stop" (e.g., "Buy Limit", "Sell-Limit", "buy stop", "SELL STOP").
-- If the message says "BUY @ 4340" or "SELL @ 4340" WITHOUT the word "limit" or "stop", use "buy" or "sell" (market order).
+MULTI-ACTION EXAMPLES:
+- "CLOSE HALF FOR 54+ PIPS, MOVE SL TO ENTRY" → 2 actions: partial_close + move_sl_to_entry
+- "TP1 HIT, MOVE SL TO BREAKEVEN" → 2 actions: tp_hit + move_sl_to_entry
+- "Add Sell-Limit 4342, Update SL to 4344" → 2 actions: new_signal + modification
+
+ORDER TYPE RULES (for new_signal actions):
+- "buy" or "sell" = MARKET orders (execute immediately). Use for "BUY GOLD @", "SELL XAUUSD @".
+- "buy_limit", "sell_limit", "buy_stop", "sell_stop" = PENDING orders. ONLY if message says "limit" or "stop".
+
+MOVE_SL_TO_ENTRY vs MODIFICATION:
+- Use "move_sl_to_entry" for: "SL to entry", "SL to breakeven", "secure at entry", "move SL to entry"
+- Use "modification" with new_stop_loss for: "move SL to 2650", "SL 2640", "new SL 2635" (specific price)
+
+TP_HIT RULES:
+- ONLY use tp_hit if message EXPLICITLY confirms TP was hit: "TP1 hit", "First target reached", "TP2 ✅"
+- Messages like "+50 pips running", "book some profits" are NOT tp_hit - they're informational
 
 Return JSON:
 {{
-    "message_type": "new_signal_complete|new_signal_incomplete|modification|re_entry|profit_notification|close_signal|partial_close|compound_action|not_trading",
     "symbol": "XAUUSD" or null,
-    "order_type": "buy|sell|buy_limit|sell_limit|buy_stop|sell_stop" or null,
-    "entry_price": number or null,
-    "entry_price_max": number or null (for ranges like "4280-4283"),
-    "stop_loss": number or null,
-    "take_profits": [numbers] or [],
-    "new_stop_loss": number or null (for modifications),
-    "new_take_profit": number or null (for modifications),
-    "re_entry_price": number or null (for re-entry signals),
-    "re_entry_price_max": number or null (for re-entry range like "4284-4286"),
-    "move_sl_to_entry": true/false (from profit notification),
-    "tp_hit_number": 1|2|3|...|null (which TP was hit, e.g., 1 for TP1, 2 for TP2),
-    "close_position": true/false,
-    "close_percentage": number or null (for partial close, e.g., 70 for "Close 70%"),
     "actions": [
         {{
-            "action_type": "new_signal|modification",
-            "order_type": "buy_limit|sell_limit|buy_stop|sell_stop" or null,
+            "action_type": "new_signal|modification|move_sl_to_entry|partial_close|full_close|tp_hit|re_entry",
+            "order_type": "buy|sell|buy_limit|sell_limit|buy_stop|sell_stop" or null,
             "entry_price": number or null,
             "entry_price_max": number or null,
             "stop_loss": number or null,
             "take_profits": [numbers] or [],
             "new_stop_loss": number or null,
-            "new_take_profit": number or null
+            "new_take_profit": number or null,
+            "close_percentage": number or null (for partial_close, e.g., 50 for "close half"),
+            "tp_hit_number": 1|2|3|null (for tp_hit),
+            "re_entry_price": number or null,
+            "re_entry_price_max": number or null
         }}
     ],
     "confidence": 0-1
 }}
 
-Note: The "actions" array is ONLY used for compound_action message_type. For other types, leave it empty [].
+IMPORTANT:
+- ALWAYS populate "actions" array, even for single actions
+- For non-trading messages (ads, greetings), return empty actions array: {{"symbol": null, "actions": [], "confidence": 1.0}}
 
 Return ONLY valid JSON, no explanation."""
 
@@ -204,6 +196,11 @@ Return ONLY valid JSON, no explanation outside the JSON."""
     def _parse_response(self, response_text: str, original_message: str) -> TradeSignal | None:
         """Parse Groq's JSON response into a TradeSignal.
 
+        The new format always returns an actions array. This method:
+        1. Parses the actions array
+        2. Derives message_type from the primary action (for backward compat)
+        3. Populates top-level fields from the primary action
+
         Args:
             response_text: The raw response from Groq
             original_message: The original Telegram message for context
@@ -217,54 +214,197 @@ Return ONLY valid JSON, no explanation outside the JSON."""
 
         data = json.loads(cleaned)
 
-        # Determine message type
-        msg_type = self._get_message_type(data)
-        if msg_type == MessageType.NOT_TRADING:
+        # Get actions array (always present in new format)
+        actions = data.get("actions", [])
+
+        # Handle empty actions (not a trading message)
+        if not actions:
             return None
 
-        # Check completeness for new signals
-        is_complete = self._check_completeness(data, msg_type)
-        if not is_complete and msg_type == MessageType.NEW_SIGNAL_COMPLETE:
-            msg_type = MessageType.NEW_SIGNAL_INCOMPLETE
+        # Convert raw action dicts to ParsedAction objects
+        parsed_actions = [self._dict_to_parsed_action(a) for a in actions]
 
-        # Get order type
-        order_type = self._get_order_type(data)
+        # Derive message_type from primary action (for backward compatibility)
+        primary_action = parsed_actions[0]
+        msg_type = self._action_to_message_type(primary_action, len(parsed_actions) > 1)
+
+        # Extract top-level fields from primary new_signal action (if exists)
+        new_signal_action = next(
+            (a for a in parsed_actions if a.action_type == ActionType.NEW_SIGNAL),
+            None
+        )
+
+        # Determine order type and signal completeness
+        if new_signal_action:
+            order_type = new_signal_action.order_type or OrderType.BUY
+            stop_loss = new_signal_action.stop_loss
+            take_profits = new_signal_action.take_profits
+            entry_price = new_signal_action.entry_price
+            is_complete = self._check_action_completeness(new_signal_action)
+            if not is_complete and msg_type == MessageType.NEW_SIGNAL_COMPLETE:
+                msg_type = MessageType.NEW_SIGNAL_INCOMPLETE
+        else:
+            order_type = OrderType.BUY
+            stop_loss = None
+            take_profits = []
+            entry_price = None
+            is_complete = True  # Non-new-signal actions don't need completeness check
+
+        # Extract modification fields from any modification action
+        mod_action = next(
+            (a for a in parsed_actions if a.action_type == ActionType.MODIFICATION),
+            None
+        )
+        new_stop_loss = mod_action.new_stop_loss if mod_action else None
+        new_take_profit = mod_action.new_take_profit if mod_action else None
+
+        # Extract partial close percentage
+        partial_action = next(
+            (a for a in parsed_actions if a.action_type == ActionType.PARTIAL_CLOSE),
+            None
+        )
+        close_percentage = partial_action.close_percentage if partial_action else None
+
+        # Extract TP hit info
+        tp_action = next(
+            (a for a in parsed_actions if a.action_type == ActionType.TP_HIT),
+            None
+        )
+        tp_hit_number = tp_action.tp_hit_number if tp_action else None
+
+        # Check for move_sl_to_entry action
+        move_sl_to_entry = any(
+            a.action_type == ActionType.MOVE_SL_TO_ENTRY for a in parsed_actions
+        )
+
+        # Check for full close action
+        close_position = any(
+            a.action_type == ActionType.FULL_CLOSE for a in parsed_actions
+        )
+
+        # Extract re-entry fields
+        re_entry_action = next(
+            (a for a in parsed_actions if a.action_type == ActionType.RE_ENTRY),
+            None
+        )
+        re_entry_price = re_entry_action.re_entry_price if re_entry_action else None
+        re_entry_price_max = re_entry_action.re_entry_price_max if re_entry_action else None
+        # For re-entry, use its stop_loss
+        if re_entry_action and re_entry_action.stop_loss:
+            stop_loss = re_entry_action.stop_loss
 
         return TradeSignal(
             symbol=data.get("symbol", ""),
             order_type=order_type,
-            entry_price=data.get("entry_price"),
-            stop_loss=data.get("stop_loss"),
-            take_profits=data.get("take_profits", []),
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profits=take_profits,
             lot_size=data.get("lot_size"),
             comment=original_message[:200],
             confidence=data.get("confidence", 0.5),
             message_type=msg_type,
             is_complete=is_complete,
-            move_sl_to_entry=data.get("move_sl_to_entry", False),
-            tp_hit_number=data.get("tp_hit_number"),
-            close_position=data.get("close_position", False),
-            close_percentage=data.get("close_percentage"),
-            new_stop_loss=data.get("new_stop_loss"),
-            new_take_profit=data.get("new_take_profit"),
-            re_entry_price=data.get("re_entry_price"),
-            re_entry_price_max=data.get("re_entry_price_max"),
-            actions=data.get("actions", []),
+            move_sl_to_entry=move_sl_to_entry,
+            tp_hit_number=tp_hit_number,
+            close_position=close_position,
+            close_percentage=close_percentage,
+            new_stop_loss=new_stop_loss,
+            new_take_profit=new_take_profit,
+            re_entry_price=re_entry_price,
+            re_entry_price_max=re_entry_price_max,
+            actions=actions,  # Keep raw dicts for backward compat with existing code
         )
 
-    def _get_message_type(self, data: dict) -> MessageType:
-        """Extract and validate message type from parsed data."""
-        msg_type_str = data.get("message_type", "not_trading")
+    def _dict_to_parsed_action(self, action_dict: dict) -> ParsedAction:
+        """Convert a raw action dict to a ParsedAction object."""
+        action_type_str = action_dict.get("action_type", "")
         try:
-            return MessageType(msg_type_str)
+            action_type = ActionType(action_type_str)
         except ValueError:
-            return MessageType.NOT_TRADING
+            # Default to modification for unknown types
+            action_type = ActionType.MODIFICATION
 
-    def _check_completeness(self, data: dict, msg_type: MessageType) -> bool:
-        """Check if a new signal has all required fields.
+        order_type = None
+        order_type_str = action_dict.get("order_type")
+        if order_type_str:
+            try:
+                order_type = OrderType(order_type_str)
+            except ValueError:
+                pass
+
+        return ParsedAction(
+            action_type=action_type,
+            order_type=order_type,
+            entry_price=action_dict.get("entry_price"),
+            entry_price_max=action_dict.get("entry_price_max"),
+            stop_loss=action_dict.get("stop_loss"),
+            take_profits=action_dict.get("take_profits", []),
+            new_stop_loss=action_dict.get("new_stop_loss"),
+            new_take_profit=action_dict.get("new_take_profit"),
+            close_percentage=action_dict.get("close_percentage"),
+            tp_hit_number=action_dict.get("tp_hit_number"),
+            re_entry_price=action_dict.get("re_entry_price"),
+            re_entry_price_max=action_dict.get("re_entry_price_max"),
+        )
+
+    def _action_to_message_type(self, action: ParsedAction, has_multiple: bool) -> MessageType:
+        """Convert a ParsedAction to its corresponding MessageType.
+
+        Args:
+            action: The primary action
+            has_multiple: True if there are multiple actions (returns COMPOUND_ACTION)
+
+        Returns:
+            The corresponding MessageType
+        """
+        if has_multiple:
+            return MessageType.COMPOUND_ACTION
+
+        action_type_map = {
+            ActionType.NEW_SIGNAL: MessageType.NEW_SIGNAL_COMPLETE,
+            ActionType.MODIFICATION: MessageType.MODIFICATION,
+            ActionType.MOVE_SL_TO_ENTRY: MessageType.MODIFICATION,  # Treat as modification
+            ActionType.PARTIAL_CLOSE: MessageType.PARTIAL_CLOSE,
+            ActionType.FULL_CLOSE: MessageType.CLOSE_SIGNAL,
+            ActionType.TP_HIT: MessageType.PROFIT_NOTIFICATION,
+            ActionType.RE_ENTRY: MessageType.RE_ENTRY,
+        }
+        return action_type_map.get(action.action_type, MessageType.NOT_TRADING)
+
+    def _check_action_completeness(self, action: ParsedAction) -> bool:
+        """Check if a new_signal action has all required fields.
 
         Market orders (buy/sell): Only need SL and TP
         Pending orders (limit/stop): Also need entry_price
+        """
+        if action.action_type != ActionType.NEW_SIGNAL:
+            return True
+
+        has_sl = action.stop_loss is not None
+        has_tp = len(action.take_profits) > 0
+        has_entry = action.entry_price is not None
+
+        if action.order_type and action.order_type.value in ["buy_limit", "sell_limit", "buy_stop", "sell_stop"]:
+            return has_sl and has_tp and has_entry
+        else:
+            # Market orders only need SL and TP
+            return has_sl and has_tp
+
+    def _check_completeness(self, data: dict, msg_type: MessageType) -> bool:
+        """Check if a new signal has all required fields (backward compatible).
+
+        This method is kept for backward compatibility with existing tests.
+        It wraps the new action-based completeness check.
+
+        Market orders (buy/sell): Only need SL and TP
+        Pending orders (limit/stop): Also need entry_price
+
+        Args:
+            data: Parsed data dict with order_type, stop_loss, take_profits, entry_price
+            msg_type: The message type classification
+
+        Returns:
+            True if the signal has all required fields for its order type
         """
         if msg_type not in [MessageType.NEW_SIGNAL_COMPLETE, MessageType.NEW_SIGNAL_INCOMPLETE]:
             return True
@@ -282,15 +422,6 @@ Return ONLY valid JSON, no explanation outside the JSON."""
             # Market orders only need SL and TP
             return has_sl and has_tp
 
-    def _get_order_type(self, data: dict) -> OrderType:
-        """Extract order type from parsed data with fallback."""
-        order_type_str = data.get("order_type")
-        if order_type_str:
-            try:
-                return OrderType(order_type_str)
-            except ValueError:
-                pass
-        return OrderType.BUY  # Default fallback
 
     async def parse_correction(
         self,

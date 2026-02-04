@@ -4,6 +4,7 @@ MetaTrader 5 Adapter - Cross-Platform Support
 Provides MT5 interface with automatic platform detection:
 - Windows: Uses native MetaTrader5 package (direct IPC with MT5 terminal)
 - macOS: Uses siliconmetatrader5 with Docker container
+- Linux: Uses mt5linux with Docker (gmag11/metatrader5_vnc)
 
 Windows Setup:
 1. Install MetaTrader 5 terminal from your broker
@@ -14,6 +15,12 @@ macOS Setup:
 2. Start: colima start --arch x86_64 --vm-type=qemu --cpu 4 --memory 8
 3. Run MT5 container from silicon-metatrader5 repo
 4. Login via VNC at http://localhost:6081/vnc.html (password: 123456)
+
+Linux Setup:
+1. Run the Docker container: docker run -d -p 3000:3000 -p 8001:8001 gmag11/metatrader5_vnc
+2. Access VNC at http://localhost:3000 to configure MT5 (auto-installs on first run)
+3. Login to your MT5 broker account via the VNC interface
+4. Run the bot - it will connect via mt5linux on port 8001
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from typing import Any
 # Platform detection
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
+IS_LINUX = sys.platform == "linux"
 
 
 class MT5AdapterBase(ABC):
@@ -568,6 +576,192 @@ class MacOSMT5Adapter(MT5AdapterBase):
         return list(result) if result else []
 
 
+class LinuxMT5Adapter(MT5AdapterBase):
+    """MetaTrader 5 adapter for Linux using mt5linux + Docker."""
+
+    def __init__(
+        self,
+        host: str | None = None,
+        port: int | None = None,
+    ) -> None:
+        self.host = host or os.getenv("MT5_DOCKER_HOST", "localhost")
+        self.port = port or int(os.getenv("MT5_DOCKER_PORT", "8001"))
+        self._client: Any = None
+
+    def initialize(self) -> bool:
+        """Initialize connection to MT5 via mt5linux server."""
+        try:
+            from mt5linux import MetaTrader5 as LinuxMT5  # type: ignore[import-untyped]
+
+            self._client = LinuxMT5(host=self.host, port=self.port)
+            return self._client.initialize()
+        except Exception as e:
+            print(f"MT5 initialization failed: {e}")
+            return False
+
+    def login(self, login: int, password: str, server: str) -> bool:
+        """Verify MT5 connection (login handled via VNC in Docker).
+
+        With Docker-based MT5, the terminal is already logged in via VNC.
+        This method just verifies the connection is working.
+        """
+        _ = login, password, server  # Credentials used in Docker VNC login
+        if not self._client:
+            return False
+        try:
+            # Just verify connection by getting account info
+            account = self._client.account_info()
+            return account is not None
+        except Exception as e:
+            print(f"MT5 connection verification failed: {e}")
+            return False
+
+    def shutdown(self) -> None:
+        """Shutdown MT5 connection."""
+        if self._client:
+            self._client.shutdown()
+            self._client = None
+
+    def last_error(self) -> tuple[int, str]:
+        """Get last error from MT5."""
+        if self._client:
+            try:
+                return self._client.last_error()
+            except Exception:
+                pass
+        return (0, "Check Wine/MT5 server logs for details")
+
+    def account_info(self) -> Any:
+        """Get account information."""
+        if self._client:
+            return self._client.account_info()
+        return None
+
+    def symbol_info(self, symbol: str) -> Any:
+        """Get symbol information."""
+        if self._client:
+            return self._client.symbol_info(symbol)
+        return None
+
+    def symbol_info_tick(self, symbol: str) -> Any:
+        """Get current tick for symbol."""
+        if self._client:
+            return self._client.symbol_info_tick(symbol)
+        return None
+
+    def symbol_select(self, symbol: str, enable: bool) -> bool:
+        """Enable/disable symbol in Market Watch."""
+        if self._client:
+            return self._client.symbol_select(symbol, enable)
+        return False
+
+    def order_check(self, request: dict) -> Any:
+        """Check if order can be executed before sending."""
+        if self._client:
+            return self._client.order_check(request)
+        return None
+
+    def order_send(self, request: dict) -> Any:
+        """Send trading order."""
+        if self._client:
+            return self._client.order_send(request)
+        return None
+
+    def copy_rates_from_pos(
+        self,
+        symbol: str,
+        timeframe: int,
+        start_pos: int,
+        count: int,
+    ) -> Any:
+        """Get historical rates."""
+        if self._client:
+            return self._client.copy_rates_from_pos(symbol, timeframe, start_pos, count)
+        return None
+
+    def ping(self) -> bool:
+        """Check if connection is alive."""
+        if self._client:
+            try:
+                # Try to get terminal info as a ping
+                info = self._client.terminal_info()
+                return info is not None
+            except Exception:
+                return False
+        return False
+
+    def positions_total(self) -> int:
+        """Get total number of open positions."""
+        if self._client:
+            return self._client.positions_total()
+        return 0
+
+    def positions_get(
+        self,
+        symbol: str | None = None,
+        ticket: int | None = None,
+    ) -> list[Any]:
+        """Get open positions, optionally filtered by symbol or ticket."""
+        if not self._client:
+            return []
+        if ticket is not None:
+            result = self._client.positions_get(ticket=ticket)
+        elif symbol is not None:
+            result = self._client.positions_get(symbol=symbol)
+        else:
+            result = self._client.positions_get()
+        return list(result) if result else []
+
+    def orders_get(
+        self,
+        symbol: str | None = None,
+        ticket: int | None = None,
+    ) -> list[Any]:
+        """Get pending orders, optionally filtered by symbol or ticket."""
+        if not self._client:
+            return []
+        if ticket is not None:
+            result = self._client.orders_get(ticket=ticket)
+        elif symbol is not None:
+            result = self._client.orders_get(symbol=symbol)
+        else:
+            result = self._client.orders_get()
+        return list(result) if result else []
+
+    def history_deals_get(
+        self,
+        date_from: Any = None,
+        date_to: Any = None,
+        position: int | None = None,
+    ) -> list[Any]:
+        """Get history deals within date range or for specific position."""
+        if not self._client:
+            return []
+        if position is not None:
+            result = self._client.history_deals_get(position=position)
+        elif date_from is not None and date_to is not None:
+            result = self._client.history_deals_get(date_from, date_to)
+        else:
+            result = self._client.history_deals_get()
+        return list(result) if result else []
+
+    def symbols_total(self) -> int:
+        """Get total number of available symbols."""
+        if self._client:
+            return self._client.symbols_total()
+        return 0
+
+    def symbols_get(self, group: str | None = None) -> list[Any]:
+        """Get all available symbols, optionally filtered by group pattern."""
+        if not self._client:
+            return []
+        if group is not None:
+            result = self._client.symbols_get(group=group)
+        else:
+            result = self._client.symbols_get()
+        return list(result) if result else []
+
+
 # Type alias for backward compatibility
 MT5Adapter = MT5AdapterBase
 
@@ -580,8 +774,8 @@ def create_mt5_adapter(
     """Factory function to create the appropriate MT5 adapter for the current platform.
 
     Args:
-        host: Docker host (macOS only)
-        port: Docker port (macOS only)
+        host: Docker/Wine server host (macOS/Linux)
+        port: Docker/Wine server port (macOS/Linux)
         path: Path to MT5 terminal executable (Windows only)
 
     Returns:
@@ -591,6 +785,8 @@ def create_mt5_adapter(
         return WindowsMT5Adapter(path=path)
     elif IS_MACOS:
         return MacOSMT5Adapter(host=host, port=port)
+    elif IS_LINUX:
+        return LinuxMT5Adapter(host=host, port=port)
     else:
-        # Fallback to macOS adapter for other Unix-like systems (Linux with Docker)
-        return MacOSMT5Adapter(host=host, port=port)
+        # Fallback to Linux adapter for other Unix-like systems
+        return LinuxMT5Adapter(host=host, port=port)
