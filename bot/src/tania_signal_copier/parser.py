@@ -39,7 +39,7 @@ ACTION TYPES:
 2. "modification" - Change SL/TP to specific price (e.g., "move SL to 2650", "new SL 2640")
 3. "move_sl_to_entry" - Move SL to breakeven/entry (e.g., "SL to entry", "secure at breakeven")
 4. "partial_close" - Close X% of position (e.g., "close half", "close 70%")
-5. "full_close" - Close entire position (e.g., "close gold", "exit trade")
+5. "full_close" - Close entire position (e.g., "close gold", "exit trade", "can close now", "close to secure profits")
 6. "tp_hit" - TP was hit notification (e.g., "TP1 hit", "first target reached")
 7. "re_entry" - Close losing position and re-enter (contains "re-entry" + new entry/SL)
 
@@ -59,6 +59,11 @@ MOVE_SL_TO_ENTRY vs MODIFICATION:
 TP_HIT RULES:
 - ONLY use tp_hit if message EXPLICITLY confirms TP was hit: "TP1 hit", "First target reached", "TP2 ✅"
 - Messages like "+50 pips running", "book some profits" are NOT tp_hit - they're informational
+
+FULL_CLOSE RULES:
+- Use full_close for direct commands AND suggestions/recommendations to close
+- Examples: "close gold", "exit trade", "can close now", "should close", "close to secure profits", "fully close now"
+- If the message recommends or suggests closing a position, treat it as full_close
 
 Return JSON:
 {{
