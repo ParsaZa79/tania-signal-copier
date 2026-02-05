@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Dialog } from "@/components/ui/dialog";
+import { LegacyDialog as Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import type { Position } from "@/types";

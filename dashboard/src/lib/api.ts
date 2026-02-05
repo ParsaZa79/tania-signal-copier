@@ -126,3 +126,177 @@ export async function getSymbolPrice(
 ): Promise<{ symbol: string; bid: number; ask: number; spread: number }> {
   return fetchApi(`/api/symbols/${symbol}/price`);
 }
+
+// ============================================================
+// Bot Management APIs (FastAPI backend)
+// ============================================================
+
+// Bot Config
+export async function getBotConfig(): Promise<{
+  success: boolean;
+  config: Record<string, string>;
+}> {
+  return fetchApi("/api/config");
+}
+
+export async function saveBotConfig(
+  config: Record<string, string>,
+  writeEnv = false
+): Promise<{ success: boolean }> {
+  return fetchApi("/api/config", {
+    method: "PUT",
+    body: JSON.stringify({ config, write_env: writeEnv }),
+  });
+}
+
+// Presets
+export async function getPresets(): Promise<{
+  success: boolean;
+  presets: Array<{ name: string; created_at: string; modified_at: string }>;
+  lastPreset: string | null;
+}> {
+  return fetchApi("/api/config/presets");
+}
+
+export async function getPreset(name: string): Promise<{
+  success: boolean;
+  preset: {
+    name: string;
+    created_at: string;
+    modified_at: string;
+    values: Record<string, string>;
+  };
+}> {
+  return fetchApi(`/api/config/presets/${encodeURIComponent(name)}`);
+}
+
+export async function savePreset(
+  name: string,
+  values: Record<string, string>
+): Promise<{ success: boolean }> {
+  return fetchApi("/api/config/presets", {
+    method: "POST",
+    body: JSON.stringify({ name, values }),
+  });
+}
+
+export async function deletePreset(name: string): Promise<{ success: boolean }> {
+  return fetchApi(`/api/config/presets/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+// Bot Control
+export async function getBotStatus(): Promise<{
+  success: boolean;
+  status: "stopped" | "starting" | "running" | "stopping" | "error";
+  pid?: number;
+  started_at?: string;
+  error?: string;
+}> {
+  return fetchApi("/api/bot/status");
+}
+
+export async function startBot(options?: {
+  preventSleep?: boolean;
+  writeEnv?: boolean;
+  config?: Record<string, string>;
+}): Promise<{
+  success: boolean;
+  status?: string;
+  pid?: number;
+  error?: string;
+}> {
+  return fetchApi("/api/bot/start", {
+    method: "POST",
+    body: JSON.stringify({
+      prevent_sleep: options?.preventSleep ?? false,
+      write_env: options?.writeEnv ?? false,
+      config: options?.config,
+    }),
+  });
+}
+
+export async function stopBot(): Promise<{
+  success: boolean;
+  status?: string;
+  error?: string;
+}> {
+  return fetchApi("/api/bot/stop", {
+    method: "POST",
+  });
+}
+
+// Bot Tracked Positions
+export async function getTrackedPositions(): Promise<{
+  success: boolean;
+  positions: Array<{
+    msg_id: number;
+    mt5_ticket: number;
+    symbol: string;
+    role: string;
+    order_type: string;
+    entry_price: number | null;
+    stop_loss: number | null;
+    lot_size: number | null;
+    status: string;
+    opened_at: string;
+  }>;
+  total: number;
+  open: number;
+  closed: number;
+}> {
+  return fetchApi("/api/bot/positions");
+}
+
+export async function clearTrackedPositions(): Promise<{ success: boolean }> {
+  return fetchApi("/api/bot/positions", { method: "DELETE" });
+}
+
+// Analysis
+export async function getAnalysisSummary(): Promise<{
+  success: boolean;
+  summary: {
+    total_signals: number;
+    tp2_hit: number;
+    tp1_hit: number;
+    sl_hit: number;
+    tp_unnumbered: number;
+    win_rate: number;
+    tp1_to_tp2_conversion: number;
+    date_range: { start: string; end: string } | null;
+    avg_time_to_tp1_minutes?: number;
+    avg_time_to_tp2_minutes?: number;
+  };
+}> {
+  return fetchApi("/api/analysis/summary");
+}
+
+export async function runAnalysis(
+  action: "fetch" | "report",
+  options?: { total?: number; batch?: number; delay?: number }
+): Promise<{
+  success: boolean;
+  output?: string;
+  error?: string;
+}> {
+  return fetchApi("/api/analysis/run", {
+    method: "POST",
+    body: JSON.stringify({ action, ...options }),
+  });
+}
+
+// Telegram Channels
+export interface TelegramChannel {
+  id: string;
+  name: string;
+  username?: string;
+  type: "channel" | "group";
+}
+
+export async function getTelegramChannels(
+  apiId: string,
+  apiHash: string
+): Promise<{ channels: TelegramChannel[] }> {
+  return fetchApi(`/api/telegram/channels?api_id=${apiId}&api_hash=${apiHash}`);
+}

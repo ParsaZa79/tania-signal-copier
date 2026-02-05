@@ -11,13 +11,19 @@ import {
   Activity,
   Plus,
   Zap,
+  Bot,
+  Sliders,
+  BarChart3,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Overview", icon: LayoutDashboard, color: "accent" as const },
-  { href: "/positions", label: "Positions", icon: Activity, color: "info" as const },
-  { href: "/orders", label: "New Order", icon: Plus, color: "success" as const },
-  { href: "/history", label: "History", icon: History, color: "warning" as const },
+  { href: "/bot", label: "Bot Control", icon: Bot, color: "success" as const },
+  { href: "/config", label: "Configuration", icon: Sliders, color: "info" as const },
+  { href: "/positions", label: "Positions", icon: Activity, color: "warning" as const },
+  { href: "/analysis", label: "Analysis", icon: BarChart3, color: "accent" as const },
+  { href: "/orders", label: "New Order", icon: Plus, color: "muted" as const },
+  { href: "/history", label: "History", icon: History, color: "muted" as const },
   { href: "/settings", label: "Settings", icon: Settings, color: "muted" as const },
 ];
 

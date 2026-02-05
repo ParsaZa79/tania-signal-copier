@@ -65,6 +65,10 @@ FULL_CLOSE RULES:
 - Examples: "close gold", "exit trade", "can close now", "should close", "close to secure profits", "fully close now"
 - If the message recommends or suggests closing a position, treat it as full_close
 
+PARTIAL_CLOSE RULES:
+- If percentage is specified (e.g., "close 70%", "close half"), use that value
+- If no percentage specified (e.g., "close partial", "book some profits"), default to 50%
+
 Return JSON:
 {{
     "symbol": "XAUUSD" or null,
@@ -263,12 +267,12 @@ Return ONLY valid JSON, no explanation outside the JSON."""
         new_stop_loss = mod_action.new_stop_loss if mod_action else None
         new_take_profit = mod_action.new_take_profit if mod_action else None
 
-        # Extract partial close percentage
+        # Extract partial close percentage (default to 50% if not specified)
         partial_action = next(
             (a for a in parsed_actions if a.action_type == ActionType.PARTIAL_CLOSE),
             None
         )
-        close_percentage = partial_action.close_percentage if partial_action else None
+        close_percentage = (partial_action.close_percentage or 50) if partial_action else None
 
         # Extract TP hit info
         tp_action = next(

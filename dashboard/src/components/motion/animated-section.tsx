@@ -20,7 +20,13 @@ export function AnimatedSection({
   }
 
   return (
-    <motion.div className={className} variants={staggerItem} {...props}>
+    <motion.div
+      className={className}
+      variants={staggerItem}
+      initial="initial"
+      animate="animate"
+      {...props}
+    >
       {children}
     </motion.div>
   );

@@ -1,4 +1,14 @@
 # API Routers
-from . import account, health, orders, positions, symbols
+from . import account, analysis, bot, config, health, orders, positions, symbols, telegram
 
-__all__ = ["account", "health", "orders", "positions", "symbols"]
+__all__ = [
+    "account",
+    "analysis",
+    "bot",
+    "config",
+    "health",
+    "orders",
+    "positions",
+    "symbols",
+    "telegram",
+]

@@ -40,9 +40,11 @@ MT5Executor = executor_module.MT5Executor
 
 from .config import config
 from .dependencies import clear_mt5_executor, set_mt5_executor
-from .routers import account, health, orders, positions, symbols
+from .routers import account, analysis, bot, config as config_router, health, orders, positions, symbols, telegram
+from .routers.bot import set_log_manager
 from .services.history_service import init_database
 from .websocket.broadcaster import start_broadcaster
+from .websocket.log_manager import log_manager
 from .websocket.manager import manager
 
 # Background task reference
@@ -55,6 +57,9 @@ async def lifespan(app: FastAPI):
     global _broadcaster_task
 
     print("Starting Trading Dashboard API...")
+
+    # Set up log manager for bot router
+    set_log_manager(log_manager)
 
     # Initialize database
     await init_database()
@@ -121,6 +126,10 @@ app.include_router(positions.router, prefix="/api/positions", tags=["Positions"]
 app.include_router(orders.router, prefix="/api/orders", tags=["Orders"])
 app.include_router(account.router, prefix="/api/account", tags=["Account"])
 app.include_router(symbols.router, prefix="/api/symbols", tags=["Symbols"])
+app.include_router(telegram.router, prefix="/api/telegram", tags=["Telegram"])
+app.include_router(bot.router, prefix="/api/bot", tags=["Bot"])
+app.include_router(config_router.router, prefix="/api/config", tags=["Config"])
+app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])
 
 
 @app.get("/")
@@ -152,6 +161,31 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+
+
+@app.websocket("/ws/logs")
+async def logs_websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for streaming bot logs.
+
+    Clients connect here to receive real-time bot output.
+    """
+    connected = await log_manager.connect(websocket)
+    if not connected:
+        return
+
+    try:
+        while True:
+            # Keep connection alive, handle any client messages
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+            elif data == "clear":
+                log_manager.clear_buffer()
+    except WebSocketDisconnect:
+        log_manager.disconnect(websocket)
+    except Exception as e:
+        print(f"Log WebSocket error: {e}")
+        log_manager.disconnect(websocket)
 
 
 if __name__ == "__main__":

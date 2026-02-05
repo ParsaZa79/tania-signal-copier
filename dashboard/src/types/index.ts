@@ -100,3 +100,86 @@ export interface HealthStatus {
     error?: string;
   };
 }
+
+// Bot Configuration types
+export interface BotConfig {
+  // Telegram settings
+  TELEGRAM_API_ID: string;
+  TELEGRAM_API_HASH: string;
+  TELEGRAM_CHANNEL: string;
+  // MT5 settings
+  MT5_LOGIN: string;
+  MT5_PASSWORD: string;
+  MT5_SERVER: string;
+  MT5_PATH?: string; // Windows only
+  MT5_DOCKER_HOST?: string; // macOS/Linux
+  MT5_DOCKER_PORT?: string; // macOS/Linux
+  // Trading settings
+  DEFAULT_LOT_SIZE: string;
+  MAX_RISK_PERCENT: string;
+  SCALP_LOT_SIZE: string;
+  RUNNER_LOT_SIZE: string;
+  TRADING_STRATEGY: "dual_tp" | "single";
+  EDIT_WINDOW_SECONDS: string;
+  // Optional
+  TEST_SYMBOL?: string;
+}
+
+export interface Preset {
+  name: string;
+  created_at: string;
+  modified_at: string;
+  values: Partial<BotConfig>;
+}
+
+export interface TelegramChannel {
+  id: string;
+  name: string;
+  username?: string;
+  type: "channel" | "group";
+}
+
+export type BotStatus = "stopped" | "starting" | "running" | "stopping" | "error";
+
+export interface BotState {
+  status: BotStatus;
+  pid?: number;
+  started_at?: string;
+  error?: string;
+}
+
+export interface LogEntry {
+  id: string;
+  timestamp: string;
+  level: "info" | "warning" | "error" | "bot" | "analysis";
+  message: string;
+}
+
+export interface AnalysisSummary {
+  total_signals: number;
+  tp2_hit: number;
+  tp1_hit: number;
+  sl_hit: number;
+  tp_unnumbered: number;
+  win_rate: number;
+  tp1_to_tp2_conversion: number;
+  date_range: {
+    start: string;
+    end: string;
+  } | null;
+  avg_time_to_tp1_minutes?: number;
+  avg_time_to_tp2_minutes?: number;
+}
+
+export interface TrackedPosition {
+  msg_id: number;
+  mt5_ticket: number;
+  symbol: string;
+  role: "scalp" | "runner" | "single";
+  order_type: string;
+  entry_price: number | null;
+  stop_loss: number | null;
+  lot_size: number | null;
+  status: "open" | "closed" | "pending_completion";
+  opened_at: string;
+}
