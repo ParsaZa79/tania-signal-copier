@@ -28,10 +28,10 @@ import {
   Loader2,
   Check,
   AlertCircle,
-  RefreshCw,
 } from "lucide-react";
 import { PageContainer, AnimatedSection } from "@/components/motion";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ChannelSelector } from "@/components/ui/channel-selector";
 
 const IS_MACOS = typeof window !== "undefined" && navigator.platform.includes("Mac");
 
@@ -396,56 +396,25 @@ export default function ConfigPage() {
                       }
 
                       if (field.type === "channel") {
+                        // Parse comma-separated IDs to array
+                        const selectedIds = (config[field.key] || "")
+                          .split(",")
+                          .map((id) => id.trim())
+                          .filter(Boolean);
+
                         return (
-                          <div key={field.key} className="space-y-2">
-                            <label className="text-sm font-medium text-text-secondary">
-                              {field.label}
-                            </label>
-                            <div className="flex gap-2">
-                              {channels.length > 0 ? (
-                                <select
-                                  className="flex-1 px-3 py-2 rounded-xl bg-bg-tertiary border border-border-subtle text-text-primary focus:outline-none focus:border-accent/50 transition-colors"
-                                  value={config[field.key] || ""}
-                                  onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                                >
-                                  <option value="">Select a channel</option>
-                                  {channels.map((channel) => (
-                                    <option key={channel.id} value={channel.id}>
-                                      {channel.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <Input
-                                  value={config[field.key] || ""}
-                                  onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                                  placeholder={field.placeholder}
-                                  className="flex-1"
-                                />
-                              )}
-                              <Button
-                                variant="secondary"
-                                size="icon"
-                                onClick={handleRefreshChannels}
-                                disabled={isLoadingChannels}
-                                title="Refresh channels from Telegram"
-                              >
-                                {isLoadingChannels ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                  <RefreshCw className="w-4 h-4" />
-                                )}
-                              </Button>
-                            </div>
-                            {channelsError && (
-                              <p className="text-xs text-danger">{channelsError}</p>
-                            )}
-                            {channels.length > 0 && (
-                              <p className="text-xs text-text-muted">
-                                {channels.length} channels available
-                              </p>
-                            )}
-                          </div>
+                          <ChannelSelector
+                            key={field.key}
+                            channels={channels}
+                            selectedChannelIds={selectedIds}
+                            onSelectionChange={(channelIds) =>
+                              handleFieldChange(field.key, channelIds.join(","))
+                            }
+                            onRefresh={handleRefreshChannels}
+                            isLoading={isLoadingChannels}
+                            error={channelsError}
+                            disabled={!config.TELEGRAM_API_ID || !config.TELEGRAM_API_HASH}
+                          />
                         );
                       }
 
