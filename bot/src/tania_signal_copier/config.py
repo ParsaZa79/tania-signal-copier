@@ -30,7 +30,7 @@ def _env_optional_float(name: str) -> float | None:
 
 
 def _parse_channel(value: str) -> str | int:
-    """Parse channel value - return int if numeric, otherwise string."""
+    """Parse a single channel value - return int if numeric, otherwise string."""
     value = value.strip()
     if not value:
         return ""
@@ -41,14 +41,35 @@ def _parse_channel(value: str) -> str | int:
         return value
 
 
+def _parse_channels(value: str) -> list[str | int]:
+    """Parse comma-separated channel values into a list."""
+    if not value or not value.strip():
+        return []
+    # Split by comma and parse each channel
+    channels = []
+    for ch in value.split(","):
+        parsed = _parse_channel(ch)
+        if parsed:  # Skip empty strings
+            channels.append(parsed)
+    return channels
+
+
 @dataclass
 class TelegramConfig:
     """Telegram API configuration."""
 
     api_id: int = int(os.getenv("TELEGRAM_API_ID", "0"))
     api_hash: str = os.getenv("TELEGRAM_API_HASH", "")
-    channel: str | int = _parse_channel(os.getenv("TELEGRAM_CHANNEL", ""))
+    # Support multiple channels (comma-separated)
+    channels: list[str | int] = field(
+        default_factory=lambda: _parse_channels(os.getenv("TELEGRAM_CHANNEL", ""))
+    )
     session_name: str = "signal_bot_session"
+
+    @property
+    def channel(self) -> str | int:
+        """Get first channel for backwards compatibility."""
+        return self.channels[0] if self.channels else ""
 
 
 @dataclass

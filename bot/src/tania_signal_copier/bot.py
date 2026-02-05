@@ -235,10 +235,27 @@ class TelegramMT5Bot:
                 attempt = 0
                 current_delay = self._reconnect_delay
 
-                # Get the channel entity
-                channel = await self._telegram.get_entity(self._config.telegram.channel)
-                channel_name = getattr(channel, "title", self._config.telegram.channel)
-                print(f"Monitoring channel: {channel_name}")
+                # Get channel entities (supports multiple channels)
+                channels_config = self._config.telegram.channels
+                if not channels_config:
+                    print("No channels configured. Please set TELEGRAM_CHANNEL in .env")
+                    return
+
+                channel_entities = []
+                channel_names = []
+                for ch in channels_config:
+                    try:
+                        entity = await self._telegram.get_entity(ch)
+                        channel_entities.append(entity)
+                        channel_names.append(getattr(entity, "title", str(ch)))
+                    except Exception as e:
+                        print(f"Warning: Could not find channel '{ch}': {e}")
+
+                if not channel_entities:
+                    print("No valid channels found. Please check your channel configuration.")
+                    return
+
+                print(f"Monitoring {len(channel_entities)} channel(s): {', '.join(channel_names)}")
 
                 # Register message handlers (remove old handlers first to avoid duplicates)
                 if self._handle_telegram_event is not None:
@@ -246,11 +263,11 @@ class TelegramMT5Bot:
                 if self._handle_edit_event is not None:
                     self._telegram.remove_event_handler(self._handle_edit_event)
 
-                @self._telegram.on(events.NewMessage(chats=channel))
+                @self._telegram.on(events.NewMessage(chats=channel_entities))
                 async def handle_new_message(event: events.NewMessage.Event) -> None:
                     await self._process_message(event)
 
-                @self._telegram.on(events.MessageEdited(chats=channel))
+                @self._telegram.on(events.MessageEdited(chats=channel_entities))
                 async def handle_edited_message(event: events.MessageEdited.Event) -> None:
                     await self._process_edited_message(event)
 

@@ -16,7 +16,9 @@ load_dotenv()
 
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-CHANNEL = os.getenv("TELEGRAM_CHANNEL", "")
+# Support comma-separated channels - use first one for test
+_raw_channel = os.getenv("TELEGRAM_CHANNEL", "")
+CHANNEL = _raw_channel.split(",")[0].strip() if _raw_channel else ""
 
 
 async def main() -> None:
