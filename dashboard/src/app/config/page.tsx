@@ -28,6 +28,7 @@ import {
   Loader2,
   Check,
   AlertCircle,
+  Brain,
 } from "lucide-react";
 import { PageContainer, AnimatedSection } from "@/components/motion";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -111,6 +112,24 @@ export default function ConfigPage() {
           ],
         },
         { key: "EDIT_WINDOW_SECONDS", label: "Edit Window (sec)", type: "text", placeholder: "120" },
+      ],
+    },
+    {
+      title: "Inference",
+      icon: <Brain className="w-5 h-5" />,
+      color: "warning",
+      fields: [
+        {
+          key: "LLM_PROVIDER",
+          label: "Provider",
+          type: "select",
+          options: [
+            { value: "groq", label: "Groq" },
+            { value: "cerebras", label: "Cerebras" },
+          ],
+        },
+        { key: "GROQ_API_KEY", label: "Groq API Key", type: "password", placeholder: "gsk_..." },
+        { key: "CEREBRAS_API_KEY", label: "Cerebras API Key", type: "password", placeholder: "csk-..." },
       ],
     },
     {
@@ -248,6 +267,7 @@ export default function ConfigPage() {
     info: { bg: "bg-info/10", border: "border-info/30", text: "text-info" },
     success: { bg: "bg-success/10", border: "border-success/30", text: "text-success" },
     accent: { bg: "bg-accent/10", border: "border-accent/30", text: "text-accent" },
+    warning: { bg: "bg-warning/10", border: "border-warning/30", text: "text-warning" },
     muted: { bg: "bg-bg-tertiary", border: "border-border-subtle", text: "text-text-muted" },
   };
 

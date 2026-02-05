@@ -104,6 +104,16 @@ class TradingConfig:
 
 
 @dataclass
+class LLMConfig:
+    """LLM provider configuration."""
+
+    provider: str = os.getenv("LLM_PROVIDER", "groq")  # "groq" or "cerebras"
+    groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+    cerebras_model: str = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b")
+    max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "8192"))
+
+
+@dataclass
 class SymbolConfig:
     """Symbol filtering and mapping configuration."""
 
@@ -127,6 +137,7 @@ class BotConfig:
     mt5: MT5Config = field(default_factory=MT5Config)
     trading: TradingConfig = field(default_factory=TradingConfig)
     symbols: SymbolConfig = field(default_factory=SymbolConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
     state_file: str = "bot_state.json"
 
 

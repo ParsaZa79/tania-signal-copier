@@ -1,23 +1,31 @@
 """
 Signal parser for the Telegram MT5 Signal Bot.
 
-This module uses Groq AI to parse and classify trading signals
-from Telegram messages into structured TradeSignal objects.
+This module uses LLM providers (Groq or Cerebras) to parse and classify
+trading signals from Telegram messages into structured TradeSignal objects.
 """
+
+from __future__ import annotations
 
 import json
 import re
+from typing import TYPE_CHECKING
 
-from groq import AsyncGroq
-
+from tania_signal_copier.config import config as global_config
+from tania_signal_copier.llm import create_llm_provider
 from tania_signal_copier.models import ActionType, MessageType, OrderType, ParsedAction, TradeSignal
+
+if TYPE_CHECKING:
+    from tania_signal_copier.config import LLMConfig
+    from tania_signal_copier.llm import LLMProvider
 
 
 class SignalParser:
-    """Uses Groq AI to parse trading signals from various formats.
+    """Uses LLM providers to parse trading signals from various formats.
 
     This parser classifies incoming Telegram messages into 8 types
-    and extracts structured trading information.
+    and extracts structured trading information. Supports Groq and
+    Cerebras as LLM backends.
 
     Message Types:
         - NEW_SIGNAL_COMPLETE: Full signal with SL, TP, Entry
@@ -127,9 +135,15 @@ Return JSON:
 
 Return ONLY valid JSON, no explanation outside the JSON."""
 
-    def __init__(self) -> None:
-        """Initialize parser with Groq async client."""
-        self.client = AsyncGroq()  # Reads GROQ_API_KEY from environment
+    def __init__(self, llm_config: LLMConfig | None = None) -> None:
+        """Initialize parser with LLM provider.
+
+        Args:
+            llm_config: LLM configuration. If None, uses global config.
+        """
+        if llm_config is None:
+            llm_config = global_config.llm
+        self._provider: LLMProvider = create_llm_provider(llm_config)
 
     def _strip_markdown(self, text: str) -> str:
         """Strip Telegram markdown formatting from text.
@@ -165,42 +179,23 @@ Return ONLY valid JSON, no explanation outside the JSON."""
         cleaned_message = self._strip_markdown(message)
 
         try:
-            response_text = await self._query_groq(self.SYSTEM_PROMPT, cleaned_message)
+            response_text = await self._query_llm(self.SYSTEM_PROMPT, cleaned_message)
             return self._parse_response(response_text, message)
         except Exception as e:
             print(f"Error parsing signal: {e}")
             return None
 
-    async def _query_groq(self, system_prompt: str, user_message: str) -> str:
-        """Query Groq AI and get the response text.
+    async def _query_llm(self, system_prompt: str, user_message: str) -> str:
+        """Query the LLM provider and get the response text.
 
         Args:
             system_prompt: The system prompt with instructions
             user_message: The user message to analyze
 
         Returns:
-            The raw response text from Groq
+            The raw response text from the LLM
         """
-        completion = await self.client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=1,
-            max_completion_tokens=8192,
-            top_p=1,
-            reasoning_effort="medium",
-            stream=True,
-        )
-
-        result_text = ""
-        async for chunk in completion:
-            content = chunk.choices[0].delta.content
-            if content:
-                result_text += content
-
-        return result_text.strip()
+        return await self._provider.query(system_prompt, user_message)
 
     def _parse_response(self, response_text: str, original_message: str) -> TradeSignal | None:
         """Parse Groq's JSON response into a TradeSignal.
@@ -463,7 +458,7 @@ Return ONLY valid JSON, no explanation outside the JSON."""
         )
 
         try:
-            response_text = await self._query_groq(system_prompt, correction_text)
+            response_text = await self._query_llm(system_prompt, correction_text)
             return self._parse_correction_response(response_text)
         except Exception as e:
             print(f"Error parsing correction: {e}")
