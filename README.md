@@ -1,100 +1,72 @@
 # Tania Signal Copier
 
-Telegram to MetaTrader 5 Signal Bot - Automates forex trading by reading signals from Telegram and executing on MT5.
+Multi-service workspace for Telegram signal parsing, MetaTrader 5 execution, and a web dashboard.
 
-## Features
+## Repository Layout
 
-- Monitors Telegram channels for trading signals
-- Uses Claude AI to parse various signal formats
-- Executes trades on MetaTrader 5 via Docker (Apple Silicon)
+- `bot/` — Telegram signal copier (Python, `uv`), MT5 execution, GUI, and analysis scripts.
+- `api/` — FastAPI backend for dashboard + bot control endpoints and WebSocket streams.
+- `dashboard/` — Next.js dashboard UI for account, positions, orders, bot control, and analysis.
+- `silicon-metatrader5/` — MT5 Docker setup for Apple Silicon hosts.
 
-## Requirements
+## Quick Start (Local)
 
-- macOS (Apple Silicon)
-- Python 3.12+
-- Docker (via Colima)
-- Telegram API credentials (from https://my.telegram.org)
-- Anthropic API key (from https://console.anthropic.com)
-- MetaTrader 5 account
+Run services in this order.
 
-## MT5 Docker Setup
-
-MT5 runs via Docker using [siliconmetatrader5](https://github.com/bahadirumutiscimen/silicon-metatrader5):
+### 1) Start MT5 Docker
 
 ```bash
-# Install dependencies
-brew install colima docker qemu lima lima-additional-guestagents
-
-# Start Colima with x86_64 emulation (first time takes ~25-30 min)
-colima start --arch x86_64 --vm-type=qemu --cpu 4 --memory 8
-
-# Clone and run the MT5 Docker container
-git clone https://github.com/bahadirumutiscimen/silicon-metatrader5.git
 cd silicon-metatrader5/docker
 docker compose up --build
-
-# First-time setup: Access VNC at http://localhost:6081/vnc.html (password: 123456)
-# Login to your MT5 account via: File > Open an Account
 ```
 
-**Daily startup:**
+### 2) Start API
+
 ```bash
-colima start  # remembers settings
-cd silicon-metatrader5/docker && docker compose up
+cd api
+cp .env.example .env  # first time only
+uv sync
+uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Installation
+### 3) Start Dashboard
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+cd dashboard
+npm install
+npm run dev
+```
 
-# Install dependencies
+### 4) Run Bot (optional, if not started via dashboard)
+
+```bash
+cd bot
+cp .env.example .env  # first time only
 uv sync --dev
-
-# Copy and configure environment variables
-cp .env.example .env
-# Edit .env with your credentials
+./run_bot.sh
 ```
 
-## Usage
+## Service URLs
 
-```bash
-# Ensure MT5 Docker is running first, then:
-uv run python -m tania_signal_copier.bot
-```
+- Dashboard: `http://localhost:3000`
+- API docs: `http://localhost:8000/docs`
+- API health: `http://localhost:8000/api/health`
+- WebSocket: `ws://localhost:8000/ws`
 
-## Development
+## Environment Files
 
-```bash
-# Run linting
-uv run ruff check .
+- `bot/.env` controls Telegram, MT5, strategy, and LLM settings for the copier.
+- `api/.env` controls API host/port/CORS and MT5 connection used by backend routes.
+- `dashboard/.env.local` can override frontend API endpoints (`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`).
 
-# Run formatting
-uv run ruff format .
+## Development Notes
 
-# Run tests
-uv run pytest
+- This repo is a monorepo-like workspace; each app has its own dependencies and lockfile.
+- Install/run commands should be executed inside each app directory (`bot`, `api`, `dashboard`).
+- `bot/.env.example` and `api/.env.example` should contain non-production placeholders only.
 
-# Install pre-commit hooks
-uv run pre-commit install
-```
+## More Detailed Docs
 
-## Project Structure
-
-```
-tania-signal-copier/
-├── src/tania_signal_copier/
-│   ├── __init__.py
-│   ├── bot.py              # Main bot logic
-│   └── mt5_adapter.py      # MT5 adapter for siliconmetatrader5
-├── tests/
-│   └── test_bot.py
-├── pyproject.toml          # Project configuration
-├── .pre-commit-config.yaml # Pre-commit hooks
-└── .env.example            # Environment template
-```
-
-## License
-
-MIT
+- Bot setup and workflows: `bot/README.md`
+- API setup and endpoints: `api/README.md`
+- Dashboard setup and integration: `dashboard/README.md`
