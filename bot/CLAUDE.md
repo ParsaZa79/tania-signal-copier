@@ -55,7 +55,10 @@ uv run pre-commit install
 
 - **executor.py**: `MT5Executor` handles all MT5 trading operations with auto-reconnection decorator (`@with_reconnect`). Key methods: `execute_signal()`, `modify_position()`, `close_position()`
 
-- **mt5_adapter.py**: `MT5Adapter` wraps siliconmetatrader5 library for Docker-based MT5 connection on macOS/Apple Silicon
+- **mt5_adapter.py**: Cross-platform MT5 adapter with auto-detection:
+  - Windows: `WindowsMT5Adapter` — native `MetaTrader5` package (direct IPC)
+  - macOS: `MacOSMT5Adapter` — `siliconmetatrader5` library + Docker
+  - Linux: `LinuxMT5Adapter` — `rpyc` classic protocol to `gmag11/metatrader5_vnc` Docker (port 8001)
 
 - **models.py**: Data classes - `TradeSignal`, `TrackedPosition`, and enums (`OrderType`, `MessageType`, `PositionStatus`)
 
@@ -73,12 +76,18 @@ uv run pre-commit install
 
 ### MT5 Docker Setup (Required for Running)
 
-MT5 runs via Docker using siliconmetatrader5 (x86_64 emulation on Apple Silicon):
+**macOS (Apple Silicon):**
 ```bash
 colima start --arch x86_64 --vm-type=qemu --cpu 4 --memory 8
 cd silicon-metatrader5/docker && docker compose up
 ```
 Access VNC at http://localhost:6081/vnc.html (password: 123456) for initial MT5 login.
+
+**Linux:**
+```bash
+docker run -d --name mt5 -p 3000:3000 -p 8001:8001 gmag11/metatrader5_vnc
+```
+Access VNC at http://localhost:3000 for initial MT5 login. The RPyC server on port 8001 is used by the bot/API to connect programmatically (via `rpyc` — no `mt5linux` package needed).
 
 ## Testing
 
@@ -90,5 +99,7 @@ Access VNC at http://localhost:6081/vnc.html (password: 123456) for initial MT5 
 ## Key Dependencies
 
 - **telethon**: Telegram client
-- **siliconmetatrader5**: MT5 connection via Docker
+- **siliconmetatrader5**: MT5 connection via Docker (macOS only)
+- **rpyc**: MT5 connection via RPyC classic protocol to Docker (Linux only)
+- **MetaTrader5**: Native MT5 terminal connection (Windows only)
 - **claude-agent-sdk**: AI-powered signal parsing (uses Claude Code subscription auth, no API key needed)

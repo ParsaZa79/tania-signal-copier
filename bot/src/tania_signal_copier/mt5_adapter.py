@@ -20,7 +20,7 @@ Linux Setup:
 1. Run the Docker container: docker run -d -p 3000:3000 -p 8001:8001 gmag11/metatrader5_vnc
 2. Access VNC at http://localhost:3000 to configure MT5 (auto-installs on first run)
 3. Login to your MT5 broker account via the VNC interface
-4. Run the bot - it will connect via mt5linux on port 8001
+4. Run the bot - it will connect via rpyc classic protocol on port 8001
 """
 
 from __future__ import annotations
@@ -577,7 +577,11 @@ class MacOSMT5Adapter(MT5AdapterBase):
 
 
 class LinuxMT5Adapter(MT5AdapterBase):
-    """MetaTrader 5 adapter for Linux using mt5linux + Docker."""
+    """MetaTrader 5 adapter for Linux using rpyc + Docker (gmag11/metatrader5_vnc).
+
+    Connects directly via RPyC classic protocol to the MT5 server running
+    inside the Docker container, replacing the broken mt5linux package.
+    """
 
     def __init__(
         self,
@@ -586,31 +590,35 @@ class LinuxMT5Adapter(MT5AdapterBase):
     ) -> None:
         self.host = host or os.getenv("MT5_DOCKER_HOST", "localhost")
         self.port = port or int(os.getenv("MT5_DOCKER_PORT", "8001"))
-        self._client: Any = None
+        self._conn: Any = None
+
+    def _eval(self, code: str) -> Any:
+        """Evaluate a Python expression on the remote MT5 server."""
+        if not self._conn:
+            return None
+        return self._conn.eval(code)
 
     def initialize(self) -> bool:
-        """Initialize connection to MT5 via mt5linux server."""
+        """Initialize connection to MT5 via RPyC classic server in Docker."""
         try:
-            from mt5linux import MetaTrader5 as LinuxMT5  # type: ignore[import-untyped]
+            import rpyc  # type: ignore[import-untyped]
 
-            self._client = LinuxMT5(host=self.host, port=self.port)
-            return self._client.initialize()
+            self._conn = rpyc.classic.connect(self.host, self.port)
+            self._conn._config["sync_request_timeout"] = 300
+            self._conn.execute("import MetaTrader5 as mt5")
+            self._conn.execute("import datetime")
+            return self._eval("mt5.initialize()")
         except Exception as e:
             print(f"MT5 initialization failed: {e}")
             return False
 
     def login(self, login: int, password: str, server: str) -> bool:
-        """Verify MT5 connection (login handled via VNC in Docker).
-
-        With Docker-based MT5, the terminal is already logged in via VNC.
-        This method just verifies the connection is working.
-        """
-        _ = login, password, server  # Credentials used in Docker VNC login
-        if not self._client:
+        """Verify MT5 connection (login handled via VNC in Docker)."""
+        _ = login, password, server
+        if not self._conn:
             return False
         try:
-            # Just verify connection by getting account info
-            account = self._client.account_info()
+            account = self._eval("mt5.account_info()")
             return account is not None
         except Exception as e:
             print(f"MT5 connection verification failed: {e}")
@@ -618,54 +626,51 @@ class LinuxMT5Adapter(MT5AdapterBase):
 
     def shutdown(self) -> None:
         """Shutdown MT5 connection."""
-        if self._client:
-            self._client.shutdown()
-            self._client = None
+        if self._conn:
+            try:
+                self._eval("mt5.shutdown()")
+            except Exception:
+                pass
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
 
     def last_error(self) -> tuple[int, str]:
         """Get last error from MT5."""
-        if self._client:
+        if self._conn:
             try:
-                return self._client.last_error()
+                return self._eval("mt5.last_error()")
             except Exception:
                 pass
         return (0, "Check Wine/MT5 server logs for details")
 
     def account_info(self) -> Any:
         """Get account information."""
-        if self._client:
-            return self._client.account_info()
-        return None
+        return self._eval("mt5.account_info()") if self._conn else None
 
     def symbol_info(self, symbol: str) -> Any:
         """Get symbol information."""
-        if self._client:
-            return self._client.symbol_info(symbol)
-        return None
+        return self._eval(f'mt5.symbol_info("{symbol}")') if self._conn else None
 
     def symbol_info_tick(self, symbol: str) -> Any:
         """Get current tick for symbol."""
-        if self._client:
-            return self._client.symbol_info_tick(symbol)
-        return None
+        return self._eval(f'mt5.symbol_info_tick("{symbol}")') if self._conn else None
 
     def symbol_select(self, symbol: str, enable: bool) -> bool:
         """Enable/disable symbol in Market Watch."""
-        if self._client:
-            return self._client.symbol_select(symbol, enable)
+        if self._conn:
+            return self._eval(f'mt5.symbol_select("{symbol}", {enable})')
         return False
 
     def order_check(self, request: dict) -> Any:
         """Check if order can be executed before sending."""
-        if self._client:
-            return self._client.order_check(request)
-        return None
+        return self._eval(f"mt5.order_check({request})") if self._conn else None
 
     def order_send(self, request: dict) -> Any:
         """Send trading order."""
-        if self._client:
-            return self._client.order_send(request)
-        return None
+        return self._eval(f"mt5.order_send({request})") if self._conn else None
 
     def copy_rates_from_pos(
         self,
@@ -675,16 +680,18 @@ class LinuxMT5Adapter(MT5AdapterBase):
         count: int,
     ) -> Any:
         """Get historical rates."""
-        if self._client:
-            return self._client.copy_rates_from_pos(symbol, timeframe, start_pos, count)
-        return None
+        if not self._conn:
+            return None
+        import rpyc.utils.classic  # type: ignore[import-untyped]
+
+        code = f'mt5.copy_rates_from_pos("{symbol}",{timeframe},{start_pos},{count})'
+        return rpyc.utils.classic.obtain(self._eval(code))
 
     def ping(self) -> bool:
         """Check if connection is alive."""
-        if self._client:
+        if self._conn:
             try:
-                # Try to get terminal info as a ping
-                info = self._client.terminal_info()
+                info = self._eval("mt5.terminal_info()")
                 return info is not None
             except Exception:
                 return False
@@ -692,8 +699,8 @@ class LinuxMT5Adapter(MT5AdapterBase):
 
     def positions_total(self) -> int:
         """Get total number of open positions."""
-        if self._client:
-            return self._client.positions_total()
+        if self._conn:
+            return self._eval("mt5.positions_total()")
         return 0
 
     def positions_get(
@@ -702,14 +709,14 @@ class LinuxMT5Adapter(MT5AdapterBase):
         ticket: int | None = None,
     ) -> list[Any]:
         """Get open positions, optionally filtered by symbol or ticket."""
-        if not self._client:
+        if not self._conn:
             return []
         if ticket is not None:
-            result = self._client.positions_get(ticket=ticket)
+            result = self._eval(f"mt5.positions_get(ticket={ticket})")
         elif symbol is not None:
-            result = self._client.positions_get(symbol=symbol)
+            result = self._eval(f'mt5.positions_get(symbol="{symbol}")')
         else:
-            result = self._client.positions_get()
+            result = self._eval("mt5.positions_get()")
         return list(result) if result else []
 
     def orders_get(
@@ -718,14 +725,14 @@ class LinuxMT5Adapter(MT5AdapterBase):
         ticket: int | None = None,
     ) -> list[Any]:
         """Get pending orders, optionally filtered by symbol or ticket."""
-        if not self._client:
+        if not self._conn:
             return []
         if ticket is not None:
-            result = self._client.orders_get(ticket=ticket)
+            result = self._eval(f"mt5.orders_get(ticket={ticket})")
         elif symbol is not None:
-            result = self._client.orders_get(symbol=symbol)
+            result = self._eval(f'mt5.orders_get(symbol="{symbol}")')
         else:
-            result = self._client.orders_get()
+            result = self._eval("mt5.orders_get()")
         return list(result) if result else []
 
     def history_deals_get(
@@ -735,30 +742,32 @@ class LinuxMT5Adapter(MT5AdapterBase):
         position: int | None = None,
     ) -> list[Any]:
         """Get history deals within date range or for specific position."""
-        if not self._client:
+        if not self._conn:
             return []
         if position is not None:
-            result = self._client.history_deals_get(position=position)
+            result = self._eval(f"mt5.history_deals_get(position={position})")
         elif date_from is not None and date_to is not None:
-            result = self._client.history_deals_get(date_from, date_to)
+            result = self._eval(
+                f"mt5.history_deals_get({repr(date_from.astimezone())}, {repr(date_to.astimezone())})"
+            )
         else:
-            result = self._client.history_deals_get()
+            result = self._eval("mt5.history_deals_get()")
         return list(result) if result else []
 
     def symbols_total(self) -> int:
         """Get total number of available symbols."""
-        if self._client:
-            return self._client.symbols_total()
+        if self._conn:
+            return self._eval("mt5.symbols_total()")
         return 0
 
     def symbols_get(self, group: str | None = None) -> list[Any]:
         """Get all available symbols, optionally filtered by group pattern."""
-        if not self._client:
+        if not self._conn:
             return []
         if group is not None:
-            result = self._client.symbols_get(group=group)
+            result = self._eval(f'mt5.symbols_get(group="{group}")')
         else:
-            result = self._client.symbols_get()
+            result = self._eval("mt5.symbols_get()")
         return list(result) if result else []
 
 
