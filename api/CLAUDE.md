@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is the FastAPI backend for the Trading Dashboard, providing REST and WebSocket APIs for managing MT5 trading positions and orders. It connects to MetaTrader 5 via the `siliconmetatrader5` library and shares the MT5Executor from the sibling `bot/` project.
+This is the FastAPI backend for the Trading Dashboard, providing REST and WebSocket APIs for managing MT5 trading positions and orders. It connects to MetaTrader 5 via platform-specific adapters (macOS: `siliconmetatrader5`, Linux: `rpyc` to Docker RPyC server, Windows: native `MetaTrader5`) and shares the MT5Executor from the sibling `bot/` project.
 
 ## Commands
 

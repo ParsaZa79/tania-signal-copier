@@ -6,7 +6,10 @@ FastAPI backend for MT5 account/position/order operations, bot lifecycle control
 
 - Python 3.12+
 - `uv` package manager
-- Reachable MT5 bridge/terminal credentials
+- Reachable MT5 bridge/terminal:
+  - Linux: `gmag11/metatrader5_vnc` Docker container (RPyC on port 8001)
+  - macOS: `silicon-metatrader5` Docker container (port 8001)
+  - Windows: native MT5 terminal
 
 ## Setup
 

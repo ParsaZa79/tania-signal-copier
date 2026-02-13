@@ -15,8 +15,9 @@ Telegram-to-MT5 signal copier service.
 - Python 3.13+
 - `uv` package manager
 - MT5 access:
-	- macOS: MT5 Docker bridge (`siliconmetatrader5`)
-	- Windows: native MT5 terminal
+	- Linux: `gmag11/metatrader5_vnc` Docker container (connects via `rpyc` on port 8001)
+	- macOS: `silicon-metatrader5` Docker container (connects via `siliconmetatrader5` on port 8001)
+	- Windows: native MT5 terminal (connects via `MetaTrader5` package)
 - Telegram API credentials from `https://my.telegram.org`
 
 ## Setup
@@ -55,7 +56,7 @@ Platform-specific scripts are also available:
 - `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`
 - `TELEGRAM_CHANNEL` (comma-separated for multiple channels)
 - `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`
-- `MT5_DOCKER_HOST`, `MT5_DOCKER_PORT` (macOS Docker bridge)
+- `MT5_DOCKER_HOST`, `MT5_DOCKER_PORT` (Docker bridge — macOS and Linux)
 - `DEFAULT_LOT_SIZE`, `MAX_RISK_PERCENT`
 - `TRADING_STRATEGY` (`dual_tp` or `single`)
 - `SCALP_LOT_SIZE`, `RUNNER_LOT_SIZE`
