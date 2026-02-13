@@ -16,12 +16,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Copy bot source (API imports models, mt5_adapter, executor from bot/)
+# Copy bot source and install bot dependencies
+COPY bot/pyproject.toml bot/uv.lock bot/README.md ./bot/
 COPY bot/src/ ./bot/src/
-COPY bot/pyproject.toml ./bot/pyproject.toml
+WORKDIR /app/bot
+RUN uv sync --frozen --no-dev
 
 # Copy API source and install dependencies
-COPY api/pyproject.toml api/uv.lock ./api/
+COPY api/pyproject.toml api/uv.lock /app/api/
 WORKDIR /app/api
 RUN uv sync --frozen --no-dev
 
