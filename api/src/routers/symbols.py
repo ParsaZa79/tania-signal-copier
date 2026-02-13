@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..dependencies import get_mt5_executor
+from ..symbol_utils import to_base_symbol
 
 router = APIRouter()
 
@@ -53,8 +54,7 @@ PRIORITY_SYMBOLS = [
 
 def _get_symbol_label(symbol: str) -> str:
     """Get a display label for a symbol."""
-    # Remove common broker suffixes for display
-    base = symbol.rstrip("b").rstrip(".")
+    base = to_base_symbol(symbol)
     if base == "XAUUSD":
         return f"{symbol} (Gold)"
     elif base == "XAGUSD":
@@ -87,7 +87,7 @@ async def list_symbols(executor=Depends(get_mt5_executor)) -> list[SymbolListIte
     # Sort: priority symbols first, then alphabetically
     def sort_key(name: str) -> tuple[int, int, str]:
         # Check if this symbol matches any priority symbol (with or without suffix)
-        base_name = name.rstrip("b").rstrip(".")
+        base_name = to_base_symbol(name)
         try:
             priority_idx = PRIORITY_SYMBOLS.index(base_name)
             return (0, priority_idx, name)

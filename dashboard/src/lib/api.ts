@@ -8,6 +8,14 @@ import type {
   TradeHistoryEntry,
 } from "@/types";
 
+function toBrokerSymbol(symbol: string): string {
+  const normalized = symbol.trim().toUpperCase();
+  if (!normalized) {
+    return normalized;
+  }
+  return normalized.endsWith("B") ? normalized : `${normalized}b`;
+}
+
 /**
  * Fetch wrapper with error handling
  */
@@ -68,16 +76,20 @@ export async function closePosition(
 export async function placeOrder(
   order: PlaceOrderRequest
 ): Promise<{ success: boolean; ticket?: number; error?: string }> {
+  const normalizedOrder: PlaceOrderRequest = {
+    ...order,
+    symbol: toBrokerSymbol(order.symbol),
+  };
   return fetchApi("/api/orders", {
     method: "POST",
-    body: JSON.stringify(order),
+    body: JSON.stringify(normalizedOrder),
   });
 }
 
 export async function getPendingOrders(
   symbol?: string
 ): Promise<PendingOrder[]> {
-  const query = symbol ? `?symbol=${symbol}` : "";
+  const query = symbol ? `?symbol=${toBrokerSymbol(symbol)}` : "";
   return fetchApi(`/api/orders/pending${query}`);
 }
 
@@ -105,7 +117,7 @@ export async function getTradeHistory(
     page: page.toString(),
     page_size: pageSize.toString(),
   });
-  if (symbol) params.set("symbol", symbol);
+  if (symbol) params.set("symbol", toBrokerSymbol(symbol));
   if (fromDate) params.set("from_date", fromDate);
   if (toDate) params.set("to_date", toDate);
   return fetchApi(`/api/account/history?${params}`);
@@ -124,7 +136,7 @@ export async function getSymbols(): Promise<SymbolListItem[]> {
 export async function getSymbolPrice(
   symbol: string
 ): Promise<{ symbol: string; bid: number; ask: number; spread: number }> {
-  return fetchApi(`/api/symbols/${symbol}/price`);
+  return fetchApi(`/api/symbols/${toBrokerSymbol(symbol)}/price`);
 }
 
 // ============================================================

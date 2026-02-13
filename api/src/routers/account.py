@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..dependencies import get_mt5_executor
 from ..schemas.account import AccountInfo, TradeHistoryEntry, TradeHistoryResponse
+from ..symbol_utils import symbols_match
 
 router = APIRouter()
 
@@ -109,7 +110,7 @@ async def get_trade_history(
 
     # Filter by symbol if specified
     if symbol:
-        deals = [d for d in deals if d["symbol"] == symbol]
+        deals = [d for d in deals if symbols_match(d["symbol"], symbol)]
 
     # Sort by time descending (newest first)
     deals.sort(key=lambda x: x["time"], reverse=True)

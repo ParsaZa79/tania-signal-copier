@@ -9,13 +9,13 @@ export const WS_URL =
 
 // Available symbols
 export const SYMBOLS = [
-  { value: "XAUUSD", label: "XAUUSD (Gold)" },
-  { value: "EURUSD", label: "EURUSD" },
-  { value: "GBPUSD", label: "GBPUSD" },
-  { value: "USDJPY", label: "USDJPY" },
-  { value: "AUDUSD", label: "AUDUSD" },
-  { value: "USDCAD", label: "USDCAD" },
-  { value: "XAGUSD", label: "XAGUSD (Silver)" },
+  { value: "XAUUSDb", label: "XAUUSDb (Gold)" },
+  { value: "EURUSDb", label: "EURUSDb" },
+  { value: "GBPUSDb", label: "GBPUSDb" },
+  { value: "USDJPYb", label: "USDJPYb" },
+  { value: "AUDUSDb", label: "AUDUSDb" },
+  { value: "USDCADb", label: "USDCADb" },
+  { value: "XAGUSDb", label: "XAGUSDb (Silver)" },
 ];
 
 // Order types

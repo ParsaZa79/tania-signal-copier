@@ -21,6 +21,7 @@ from ..schemas.order import (
     PlaceOrderRequest,
     PlaceOrderResponse,
 )
+from ..symbol_utils import to_broker_symbol
 
 router = APIRouter()
 
@@ -64,7 +65,7 @@ async def place_order(
         raise HTTPException(status_code=400, detail="Price is required for pending orders")
 
     signal = TradeSignal(
-        symbol=request.symbol,
+        symbol=to_broker_symbol(request.symbol),
         order_type=bot_order_type,
         entry_price=request.price,
         stop_loss=request.sl,
@@ -98,7 +99,8 @@ async def list_pending_orders(
     Returns:
         list[PendingOrderResponse]: List of pending orders.
     """
-    orders = executor.get_pending_orders(symbol=symbol)
+    broker_symbol = to_broker_symbol(symbol) if symbol else None
+    orders = executor.get_pending_orders(symbol=broker_symbol)
     return [
         PendingOrderResponse(
             ticket=order["ticket"],
