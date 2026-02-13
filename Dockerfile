@@ -35,10 +35,16 @@ CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "800
 # --------------- Dashboard Stage ---------------
 FROM oven/bun:1 AS dashboard-builder
 
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
+
 WORKDIR /app
 COPY dashboard/package.json dashboard/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY dashboard/ .
+
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 RUN bun run build
 
 
