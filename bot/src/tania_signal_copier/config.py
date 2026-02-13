@@ -118,15 +118,38 @@ class SymbolConfig:
     """Symbol filtering and mapping configuration."""
 
     allowed_symbols: list[str] = field(default_factory=lambda: ["XAUUSD"])
-    symbol_map: dict[str, str] = field(default_factory=lambda: {"XAUUSD": "XAUUSD"})
+    symbol_map: dict[str, str] = field(default_factory=lambda: {"XAUUSD": "XAUUSDb"})
+    broker_suffix: str = "b"
+
+    def _normalize_base_symbol(self, symbol: str) -> str:
+        """Normalize symbol to its base form (without broker suffix)."""
+        normalized = symbol.strip().upper()
+        suffix = self.broker_suffix.lower()
+        if normalized and normalized.lower().endswith(suffix):
+            return normalized[:-len(self.broker_suffix)]
+        return normalized
 
     def is_allowed(self, symbol: str) -> bool:
         """Check if a symbol is in the allowed list."""
-        return symbol in self.allowed_symbols
+        if not symbol:
+            return False
+        allowed_base_symbols = {self._normalize_base_symbol(item) for item in self.allowed_symbols}
+        return self._normalize_base_symbol(symbol) in allowed_base_symbols
 
     def get_broker_symbol(self, symbol: str) -> str:
         """Get the broker-specific symbol name."""
-        return self.symbol_map.get(symbol, symbol)
+        if not symbol:
+            return symbol
+
+        normalized_input = symbol.strip().upper()
+        mapped_symbol = self.symbol_map.get(normalized_input)
+        if mapped_symbol:
+            return mapped_symbol
+
+        if normalized_input.lower().endswith(self.broker_suffix.lower()):
+            return normalized_input
+
+        return f"{normalized_input}{self.broker_suffix}"
 
 
 @dataclass
