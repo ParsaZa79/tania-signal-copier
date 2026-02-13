@@ -1,7 +1,16 @@
 // API configuration
+// process.env.NODE_ENV is always inlined by Next.js, so the production
+// fallback works even if NEXT_PUBLIC_* env vars fail to be injected.
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-export const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws";
+  process.env.NEXT_PUBLIC_API_URL ||
+  (process.env.NODE_ENV === "production"
+    ? "https://api.kiaparsaprintingmoneymachine.cloud"
+    : "http://localhost:8000");
+export const WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL ||
+  (process.env.NODE_ENV === "production"
+    ? "wss://api.kiaparsaprintingmoneymachine.cloud/ws"
+    : "ws://localhost:8000/ws");
 
 // Available symbols
 export const SYMBOLS = [
