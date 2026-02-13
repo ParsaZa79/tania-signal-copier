@@ -1,26 +1,11 @@
 // API configuration
-// Workaround for Next.js 16 standalone + Turbopack bug (vercel/next.js#80194):
-// NEXT_PUBLIC_* env vars are NOT inlined in client components with standalone output.
-// Detect environment at runtime via window.location instead of process.env.
-function detectUrls(): { api: string; ws: string } {
-  if (typeof window !== "undefined") {
-    const { hostname } = window.location;
-    if (hostname === "localhost" || hostname === "127.0.0.1") {
-      return {
-        api: "http://localhost:8000",
-        ws: "ws://localhost:8000/ws",
-      };
-    }
-  }
-  return {
-    api: "https://api.kiaparsaprintingmoneymachine.cloud",
-    ws: "wss://api.kiaparsaprintingmoneymachine.cloud/ws",
-  };
-}
-
-const _urls = detectUrls();
-export const API_URL = _urls.api;
-export const WS_URL = _urls.ws;
+// Default to production URLs. In standalone builds, NEXT_PUBLIC_* env vars
+// are NOT inlined due to Next.js bug (vercel/next.js#80194), so the fallback
+// is the production URL. In dev mode, env vars work normally via .env.local.
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "https://api.kiaparsaprintingmoneymachine.cloud";
+export const WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL || "wss://api.kiaparsaprintingmoneymachine.cloud/ws";
 
 // Available symbols
 export const SYMBOLS = [
