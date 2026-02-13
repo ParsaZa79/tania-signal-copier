@@ -145,6 +145,9 @@ async def get_symbol_price(symbol: str, executor=Depends(get_mt5_executor)) -> P
         raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
 
     actual_symbol = info["symbol"]
+    # Ensure symbol is in Market Watch (required for tick data)
+    if not info["info"].visible:
+        executor._mt5.symbol_select(actual_symbol, True)
     tick = executor._mt5.symbol_info_tick(actual_symbol)
     if not tick:
         raise HTTPException(status_code=503, detail=f"Could not get price for {symbol}")
