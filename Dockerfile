@@ -40,9 +40,12 @@ COPY dashboard/package.json dashboard/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY dashboard/ .
 
-ENV NEXT_PUBLIC_API_URL=https://api.kiaparsaprintingmoneymachine.cloud
-ENV NEXT_PUBLIC_WS_URL=wss://api.kiaparsaprintingmoneymachine.cloud/ws
-RUN bun run build
+# Next.js inlines NEXT_PUBLIC_* at build time. Write .env.production so Next.js
+# reliably picks them up, and also pass them inline to the RUN command.
+RUN printf 'NEXT_PUBLIC_API_URL=https://api.kiaparsaprintingmoneymachine.cloud\nNEXT_PUBLIC_WS_URL=wss://api.kiaparsaprintingmoneymachine.cloud/ws\n' > .env.production \
+    && NEXT_PUBLIC_API_URL=https://api.kiaparsaprintingmoneymachine.cloud \
+       NEXT_PUBLIC_WS_URL=wss://api.kiaparsaprintingmoneymachine.cloud/ws \
+       bun run build
 
 
 FROM oven/bun:1-slim AS dashboard
