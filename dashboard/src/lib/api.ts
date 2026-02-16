@@ -312,3 +312,32 @@ export async function getTelegramChannels(
 ): Promise<{ channels: TelegramChannel[] }> {
   return fetchApi(`/api/telegram/channels?api_id=${apiId}&api_hash=${apiHash}`);
 }
+
+// System Prompts
+export async function getSystemPrompts(): Promise<{
+  success: boolean;
+  system_prompt: string;
+  correction_system_prompt: string;
+  default_system_prompt: string;
+  default_correction_system_prompt: string;
+  is_custom_system_prompt: boolean;
+  is_custom_correction_prompt: boolean;
+}> {
+  return fetchApi("/api/prompts");
+}
+
+export async function saveSystemPrompts(prompts: {
+  system_prompt?: string;
+  correction_system_prompt?: string;
+}): Promise<{ success: boolean }> {
+  return fetchApi("/api/prompts", {
+    method: "PUT",
+    body: JSON.stringify(prompts),
+  });
+}
+
+export async function resetSystemPrompts(): Promise<{ success: boolean }> {
+  return fetchApi("/api/prompts", {
+    method: "DELETE",
+  });
+}

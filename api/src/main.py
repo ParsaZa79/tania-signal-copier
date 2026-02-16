@@ -40,7 +40,7 @@ MT5Executor = executor_module.MT5Executor
 
 from .config import config
 from .dependencies import clear_mt5_executor, set_mt5_executor
-from .routers import account, analysis, bot, config as config_router, health, orders, positions, symbols, telegram
+from .routers import account, analysis, bot, config as config_router, health, orders, positions, prompts, symbols, telegram
 from .routers.bot import set_log_manager
 from .services.history_service import init_database
 from .websocket.broadcaster import start_broadcaster
@@ -129,6 +129,7 @@ app.include_router(symbols.router, prefix="/api/symbols", tags=["Symbols"])
 app.include_router(telegram.router, prefix="/api/telegram", tags=["Telegram"])
 app.include_router(bot.router, prefix="/api/bot", tags=["Bot"])
 app.include_router(config_router.router, prefix="/api/config", tags=["Config"])
+app.include_router(prompts.router, prefix="/api/prompts", tags=["Prompts"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])
 
 

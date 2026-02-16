@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,9 @@ import {
   savePreset,
   deletePreset,
   getTelegramChannels,
+  getSystemPrompts,
+  saveSystemPrompts,
+  resetSystemPrompts,
   type TelegramChannel,
 } from "@/lib/api";
 import {
@@ -29,6 +33,7 @@ import {
   Check,
   AlertCircle,
   Brain,
+  RotateCcw,
 } from "lucide-react";
 import { PageContainer, AnimatedSection } from "@/components/motion";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -65,6 +70,14 @@ export default function ConfigPage() {
   const [channels, setChannels] = useState<TelegramChannel[]>([]);
   const [isLoadingChannels, setIsLoadingChannels] = useState(false);
   const [channelsError, setChannelsError] = useState<string | null>(null);
+
+  // System prompts state
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [correctionPrompt, setCorrectionPrompt] = useState("");
+  const [isCustomSystemPrompt, setIsCustomSystemPrompt] = useState(false);
+  const [isCustomCorrectionPrompt, setIsCustomCorrectionPrompt] = useState(false);
+  const [promptsSaving, setPromptsSaving] = useState(false);
+  const [promptsSaveStatus, setPromptsSaveStatus] = useState<"idle" | "success" | "error">("idle");
 
   const configSections: ConfigSection[] = [
     {
@@ -142,7 +155,11 @@ export default function ConfigPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [configRes, presetsRes] = await Promise.all([getBotConfig(), getPresets()]);
+      const [configRes, presetsRes, promptsRes] = await Promise.all([
+        getBotConfig(),
+        getPresets(),
+        getSystemPrompts(),
+      ]);
 
       if (configRes.success) {
         setConfig(configRes.config);
@@ -153,6 +170,13 @@ export default function ConfigPage() {
         if (presetsRes.lastPreset) {
           setCurrentPreset(presetsRes.lastPreset);
         }
+      }
+
+      if (promptsRes.success) {
+        setSystemPrompt(promptsRes.system_prompt);
+        setCorrectionPrompt(promptsRes.correction_system_prompt);
+        setIsCustomSystemPrompt(promptsRes.is_custom_system_prompt);
+        setIsCustomCorrectionPrompt(promptsRes.is_custom_correction_prompt);
       }
     } catch (error) {
       console.error("Failed to load config:", error);
@@ -260,6 +284,42 @@ export default function ConfigPage() {
       }
     } catch (error) {
       console.error("Failed to delete preset:", error);
+    }
+  };
+
+  const handleSavePrompts = async () => {
+    setPromptsSaving(true);
+    setPromptsSaveStatus("idle");
+    try {
+      await saveSystemPrompts({
+        system_prompt: systemPrompt,
+        correction_system_prompt: correctionPrompt,
+      });
+      setPromptsSaveStatus("success");
+      setIsCustomSystemPrompt(true);
+      setIsCustomCorrectionPrompt(true);
+      setTimeout(() => setPromptsSaveStatus("idle"), 2000);
+    } catch (error) {
+      console.error("Failed to save prompts:", error);
+      setPromptsSaveStatus("error");
+    } finally {
+      setPromptsSaving(false);
+    }
+  };
+
+  const handleResetPrompts = async () => {
+    try {
+      await resetSystemPrompts();
+      const promptsRes = await getSystemPrompts();
+      if (promptsRes.success) {
+        setSystemPrompt(promptsRes.system_prompt);
+        setCorrectionPrompt(promptsRes.correction_system_prompt);
+        setIsCustomSystemPrompt(false);
+        setIsCustomCorrectionPrompt(false);
+        setPromptsSaveStatus("idle");
+      }
+    } catch (error) {
+      console.error("Failed to reset prompts:", error);
     }
   };
 
@@ -456,6 +516,94 @@ export default function ConfigPage() {
           );
         })}
       </div>
+
+      {/* System Prompts Section */}
+      <AnimatedSection>
+        <Card>
+          <CardHeader className="bg-gradient-to-r from-warning/10 to-transparent">
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-warning/10 flex items-center justify-center">
+                  <Brain className="w-5 h-5 text-warning" />
+                </div>
+                <div>
+                  <span>LLM System Prompts</span>
+                  <p className="text-xs text-text-muted font-normal mt-0.5">
+                    Controls how the AI parses trading signals. Changes take effect on next bot restart.
+                  </p>
+                </div>
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                {(isCustomSystemPrompt || isCustomCorrectionPrompt) && (
+                  <Badge variant="default" className="bg-warning/20 text-warning border-warning/30">
+                    Customized
+                  </Badge>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleResetPrompts}
+                  disabled={!isCustomSystemPrompt && !isCustomCorrectionPrompt}
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span className="ml-1">Reset to Defaults</span>
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleSavePrompts}
+                  disabled={promptsSaving}
+                >
+                  {promptsSaving ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : promptsSaveStatus === "success" ? (
+                    <Check className="w-4 h-4 text-success" />
+                  ) : promptsSaveStatus === "error" ? (
+                    <AlertCircle className="w-4 h-4 text-danger" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
+                  <span className="ml-1">Save Prompts</span>
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-6 space-y-6">
+            <Textarea
+              label="Signal Parsing Prompt"
+              value={systemPrompt}
+              onChange={(e) => {
+                setSystemPrompt(e.target.value);
+                setPromptsSaveStatus("idle");
+              }}
+              rows={20}
+              placeholder="Enter the system prompt for signal parsing..."
+            />
+            <Textarea
+              label="Correction Parsing Prompt"
+              value={correctionPrompt}
+              onChange={(e) => {
+                setCorrectionPrompt(e.target.value);
+                setPromptsSaveStatus("idle");
+              }}
+              rows={12}
+              placeholder="Enter the system prompt for correction parsing..."
+            />
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-warning/5 border border-warning/20">
+              <AlertCircle className="w-4 h-4 text-warning mt-0.5 shrink-0" />
+              <p className="text-xs text-text-muted">
+                The correction prompt uses template placeholders like{" "}
+                <code className="text-text-secondary">{"{original_entry}"}</code>,{" "}
+                <code className="text-text-secondary">{"{original_sl}"}</code>,{" "}
+                <code className="text-text-secondary">{"{original_tps}"}</code>,{" "}
+                <code className="text-text-secondary">{"{symbol}"}</code>, and{" "}
+                <code className="text-text-secondary">{"{order_type}"}</code>.
+                Make sure to preserve these when editing.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </AnimatedSection>
 
       {/* Save As Preset Dialog */}
       <Dialog open={showPresetDialog} onOpenChange={setShowPresetDialog}>

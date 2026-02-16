@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tania_signal_copier.config import config as global_config
@@ -18,6 +19,9 @@ from tania_signal_copier.models import ActionType, MessageType, OrderType, Parse
 if TYPE_CHECKING:
     from tania_signal_copier.config import LLMConfig
     from tania_signal_copier.llm import LLMProvider
+
+# Path to custom system prompts file (written by the dashboard API)
+_CUSTOM_PROMPTS_PATH = Path(__file__).parent.parent.parent / ".system_prompts.json"
 
 
 class SignalParser:
@@ -145,6 +149,13 @@ Return ONLY valid JSON, no explanation outside the JSON."""
             llm_config = global_config.llm
         self._provider: LLMProvider = create_llm_provider(llm_config)
 
+        # Load custom prompts from file (falls back to class-level defaults)
+        custom = self._load_custom_prompts()
+        self._system_prompt = custom.get("system_prompt") or self.SYSTEM_PROMPT
+        self._correction_system_prompt = (
+            custom.get("correction_system_prompt") or self.CORRECTION_SYSTEM_PROMPT
+        )
+
     def _strip_markdown(self, text: str) -> str:
         """Strip Telegram markdown formatting from text.
 
@@ -167,6 +178,29 @@ Return ONLY valid JSON, no explanation outside the JSON."""
         cleaned = re.sub(r"`", "", cleaned)
         return cleaned
 
+    @staticmethod
+    def _load_custom_prompts() -> dict[str, str | None]:
+        """Load custom system prompts from file if available.
+
+        Returns:
+            Dict with 'system_prompt' and/or 'correction_system_prompt' keys,
+            or empty dict if no custom prompts file exists.
+        """
+        if not _CUSTOM_PROMPTS_PATH.exists():
+            return {}
+
+        try:
+            data = json.loads(_CUSTOM_PROMPTS_PATH.read_text(encoding="utf-8"))
+            result: dict[str, str | None] = {}
+            if data.get("system_prompt"):
+                result["system_prompt"] = data["system_prompt"]
+            if data.get("correction_system_prompt"):
+                result["correction_system_prompt"] = data["correction_system_prompt"]
+            return result
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: Could not load custom prompts from {_CUSTOM_PROMPTS_PATH}: {e}")
+            return {}
+
     async def parse_signal(self, message: str) -> TradeSignal | None:
         """Parse a Telegram message into a structured trade signal.
 
@@ -179,7 +213,7 @@ Return ONLY valid JSON, no explanation outside the JSON."""
         cleaned_message = self._strip_markdown(message)
 
         try:
-            response_text = await self._query_llm(self.SYSTEM_PROMPT, cleaned_message)
+            response_text = await self._query_llm(self._system_prompt, cleaned_message)
             return self._parse_response(response_text, message)
         except Exception as e:
             print(f"Error parsing signal: {e}")
@@ -449,7 +483,7 @@ Return ONLY valid JSON, no explanation outside the JSON."""
         Returns:
             Dict with corrected values, or None if parsing failed
         """
-        system_prompt = self.CORRECTION_SYSTEM_PROMPT.format(
+        system_prompt = self._correction_system_prompt.format(
             original_entry=original_entry,
             original_sl=original_sl,
             original_tps=original_tps,

@@ -46,5 +46,8 @@ telegram_messages.log
 # Application state
 bot_state.json
 
+# Custom system prompts (written by dashboard)
+.system_prompts.json
+
 # Lock files
 .bot.lock
