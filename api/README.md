@@ -38,6 +38,7 @@ From `src/config.py` / `.env.example`:
 - `CORS_ORIGINS` (comma-separated)
 - `DEBUG`
 - `DATABASE_URL`
+- `BOT_DATA_DIR` (persistent runtime config/presets/state directory)
 - `BOT_STATE_FILE`
 
 ## Main Endpoints
@@ -51,6 +52,11 @@ From `src/config.py` / `.env.example`:
 - Bot control/status: `/api/bot`
 - Runtime config/presets: `/api/config`
 - Analysis: `/api/analysis`
+
+## Persistence (Dokploy)
+
+Mount a persistent volume to `/app/data` on the `trading-api` service.
+The API stores runtime bot config, presets, and bot state there so redeploys do not reset them.
 
 ## WebSockets
 

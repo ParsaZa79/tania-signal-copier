@@ -217,12 +217,12 @@ export default function ConfigPage() {
     setSaveStatus("idle");
   };
 
-  const handleSave = async (writeEnv = false) => {
+  const handleSave = async () => {
     setIsSaving(true);
     setSaveStatus("idle");
 
     try {
-      await saveBotConfig(config, writeEnv);
+      await saveBotConfig(config);
 
       if (currentPreset) {
         await savePreset(currentPreset, config);
@@ -348,7 +348,7 @@ export default function ConfigPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-text-primary tracking-tight">Configuration</h1>
-            <p className="text-sm text-text-muted mt-1">Bot settings and environment variables</p>
+            <p className="text-sm text-text-muted mt-1">Bot settings and runtime presets</p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -411,8 +411,8 @@ export default function ConfigPage() {
               </Button>
             )}
 
-            {/* Save Buttons */}
-            <Button variant="secondary" onClick={() => handleSave(false)} disabled={isSaving}>
+            {/* Save Button */}
+            <Button variant="accent" onClick={handleSave} disabled={isSaving}>
               {isSaving ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : saveStatus === "success" ? (
@@ -423,11 +423,6 @@ export default function ConfigPage() {
                 <Save className="w-4 h-4" />
               )}
               <span className="ml-2">Save</span>
-            </Button>
-
-            <Button variant="accent" onClick={() => handleSave(true)} disabled={isSaving}>
-              <Save className="w-4 h-4" />
-              <span className="ml-2">Save to .env</span>
             </Button>
           </div>
         </div>

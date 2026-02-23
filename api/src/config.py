@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .runtime_data import STATE_PATH
+
 # Load .env file
 load_dotenv()
 
@@ -57,7 +59,7 @@ class Config:
     bot_state_file: str = field(
         default_factory=lambda: os.getenv(
             "BOT_STATE_FILE",
-            str(Path(__file__).parent.parent.parent / "bot" / "bot_state.json"),
+            str(STATE_PATH),
         )
     )
 

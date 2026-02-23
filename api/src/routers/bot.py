@@ -7,20 +7,14 @@ import signal
 import subprocess
 import sys
 from datetime import datetime
-from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-router = APIRouter()
+from ..runtime_data import BOT_DIR, CACHE_PATH, ENV_PATH, PID_FILE, STATE_PATH
 
-# Paths
-BOT_DIR = Path(__file__).parent.parent.parent.parent / "bot"
-PID_FILE = BOT_DIR / ".bot.pid"
-ENV_PATH = BOT_DIR / ".env"
-CACHE_PATH = BOT_DIR / ".env.gui_cache.json"
-STATE_PATH = BOT_DIR / "bot_state.json"
+router = APIRouter()
 
 # Global state
 _bot_process: subprocess.Popen | None = None
@@ -59,12 +53,20 @@ def _format_env_value(value: str) -> str:
 
 
 async def _load_env_for_bot() -> dict[str, str]:
-    """Load environment variables from .env and cache files."""
+    """Load runtime config from cache, with one-time fallback to legacy .env."""
     import json
 
     env: dict[str, str] = {}
+    if CACHE_PATH.exists():
+        try:
+            cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+            if isinstance(cache, dict):
+                env.update({str(key): str(value) for key, value in cache.items()})
+            return {str(key): str(value) for key, value in env.items()}
+        except Exception:
+            return {}
 
-    # Load from .env file
+    # One-time fallback for old setups still storing config in .env
     if ENV_PATH.exists():
         try:
             content = ENV_PATH.read_text(encoding="utf-8")
@@ -74,16 +76,12 @@ async def _load_env_for_bot() -> dict[str, str]:
                     continue
                 key, raw_value = line.split("=", 1)
                 env[key.strip()] = _parse_env_value(raw_value)
-        except Exception:
-            pass
 
-    # Override with cache values
-    if CACHE_PATH.exists():
-        try:
-            cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-            env.update(cache)
+            if env:
+                CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                CACHE_PATH.write_text(json.dumps(env, indent=2), encoding="utf-8")
         except Exception:
-            pass
+            return {}
 
     return env
 
@@ -201,6 +199,11 @@ async def start_bot(request: StartBotRequest):
         # Load environment
         env_vars = await _load_env_for_bot()
         process_env = {**os.environ, **env_vars, "PYTHONUNBUFFERED": "1"}
+        process_env.setdefault("BOT_STATE_FILE", str(STATE_PATH))
+        process_env.setdefault(
+            "TELEGRAM_SESSION_NAME",
+            str(STATE_PATH.with_name("signal_bot_session")),
+        )
 
         # Build command
         uv_path = shutil.which("uv")

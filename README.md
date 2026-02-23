@@ -108,6 +108,8 @@ The `mt5_adapter.py` module auto-detects the platform and uses the correct adapt
 - `bot/.env` controls Telegram, MT5, strategy, and LLM settings for the copier.
 - `api/.env` controls API host/port/CORS and MT5 connection used by backend routes.
 - `dashboard/.env.local` can override frontend API endpoints (`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`).
+- In deployments, runtime bot config/presets/state are stored in `BOT_DATA_DIR` (defaults to `/app/data`).
+  Mount this path as a persistent volume in Dokploy to keep data across redeploys.
 
 ## Development Notes
 

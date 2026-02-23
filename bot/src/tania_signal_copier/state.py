@@ -9,7 +9,6 @@ Version 3 adds original signal data for edit detection.
 """
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -250,7 +249,8 @@ class BotState:
             },
         }
 
-        with open(self.state_file, "w") as f:
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        with self.state_file.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     def load(self) -> None:
@@ -260,11 +260,11 @@ class BotState:
         v2 and v3 share the same format; v3 adds optional fields with defaults.
         If the file doesn't exist or is corrupted, starts with empty state.
         """
-        if not os.path.exists(self.state_file):
+        if not self.state_file.exists():
             return
 
         try:
-            with open(self.state_file) as f:
+            with self.state_file.open(encoding="utf-8") as f:
                 data = json.load(f)
 
             version = data.get("version", 1)

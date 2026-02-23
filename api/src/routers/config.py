@@ -2,19 +2,13 @@
 
 import json
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-router = APIRouter()
+from ..runtime_data import CACHE_PATH, ENV_PATH, LAST_PRESET_PATH, PRESETS_DIR
 
-# Paths
-BOT_DIR = Path(__file__).parent.parent.parent.parent / "bot"
-ENV_PATH = BOT_DIR / ".env"
-CACHE_PATH = BOT_DIR / ".env.gui_cache.json"
-PRESETS_DIR = BOT_DIR / ".presets"
-LAST_PRESET_PATH = PRESETS_DIR / "_last_preset.json"
+router = APIRouter()
 
 
 def _parse_env_value(raw: str) -> str:
@@ -108,6 +102,7 @@ def _load_cache() -> dict[str, str]:
 
 def _save_cache(values: dict[str, str]) -> None:
     """Save config values to cache."""
+    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     CACHE_PATH.write_text(json.dumps(values, indent=2), encoding="utf-8")
 
 
@@ -146,13 +141,19 @@ class SavePresetRequest(BaseModel):
 async def get_config():
     """Get current bot configuration.
 
-    Merges .env file with cached values (cache takes precedence).
+    Uses cached runtime values.
+    If no cache exists yet, it imports values from legacy .env once.
     """
     try:
-        env_values = _read_env_file()
         cache_values = _load_cache()
-        merged = {**env_values, **cache_values}
-        return {"success": True, "config": merged}
+        if cache_values:
+            return {"success": True, "config": cache_values}
+
+        # One-time fallback for older setups still using bot/.env
+        env_values = _read_env_file()
+        if env_values:
+            _save_cache(env_values)
+        return {"success": True, "config": env_values}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 

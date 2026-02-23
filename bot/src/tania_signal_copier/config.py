@@ -64,7 +64,7 @@ class TelegramConfig:
     channels: list[str | int] = field(
         default_factory=lambda: _parse_channels(os.getenv("TELEGRAM_CHANNEL", ""))
     )
-    session_name: str = "signal_bot_session"
+    session_name: str = os.getenv("TELEGRAM_SESSION_NAME", "signal_bot_session")
 
     @property
     def channel(self) -> str | int:
@@ -161,7 +161,7 @@ class BotConfig:
     trading: TradingConfig = field(default_factory=TradingConfig)
     symbols: SymbolConfig = field(default_factory=SymbolConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
-    state_file: str = "bot_state.json"
+    state_file: str = os.getenv("BOT_STATE_FILE", "bot_state.json")
 
 
 # Global config instance
