@@ -19,6 +19,8 @@ WORKDIR /app
 # Copy bot source and install bot dependencies
 COPY bot/pyproject.toml bot/uv.lock bot/README.md ./bot/
 COPY bot/src/ ./bot/src/
+COPY bot/scripts/ ./bot/scripts/
+COPY bot/analysis/ ./bot/analysis/
 WORKDIR /app/bot
 RUN uv sync --frozen --no-dev
 
