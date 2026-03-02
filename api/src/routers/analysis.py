@@ -11,6 +11,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from .bot import _load_env_for_bot
+
 router = APIRouter()
 
 # Paths
@@ -186,11 +188,20 @@ async def run_analysis(request: RunAnalysisRequest):
         cmd = [sys.executable, str(script_path)] + args
 
     try:
+        # Load bot config (Telegram credentials etc.) from dashboard cache
+        bot_env = await _load_env_for_bot()
+
+        # Build safe env: strip VIRTUAL_ENV so uv resolves the bot's own venv,
+        # then overlay the dashboard-stored bot config variables.
+        script_env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+        script_env.update(bot_env)
+        script_env["PYTHONUNBUFFERED"] = "1"
+
         # Run the script using subprocess_exec (safe, no shell)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(BOT_DIR),
-            env={k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"} | {"PYTHONUNBUFFERED": "1"},
+            env=script_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
