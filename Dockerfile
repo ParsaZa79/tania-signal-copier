@@ -20,7 +20,7 @@ WORKDIR /app
 COPY bot/pyproject.toml bot/uv.lock bot/README.md ./bot/
 COPY bot/src/ ./bot/src/
 COPY bot/scripts/ ./bot/scripts/
-COPY bot/analysis/ ./bot/analysis/
+RUN mkdir -p ./bot/analysis
 WORKDIR /app/bot
 RUN uv sync --frozen --no-dev
 
