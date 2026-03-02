@@ -190,7 +190,7 @@ async def run_analysis(request: RunAnalysisRequest):
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(BOT_DIR),
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env={k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"} | {"PYTHONUNBUFFERED": "1"},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
