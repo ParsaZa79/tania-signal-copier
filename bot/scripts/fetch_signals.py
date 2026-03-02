@@ -19,7 +19,9 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 # Support comma-separated channels - use first one for fetch
 _raw_channel = os.getenv("TELEGRAM_CHANNEL", "TaniaTradingAcademy")
-CHANNEL = _raw_channel.split(",")[0].strip() if _raw_channel else "TaniaTradingAcademy"
+_first_channel = _raw_channel.split(",")[0].strip() if _raw_channel else "TaniaTradingAcademy"
+# Convert numeric channel IDs to int so Telethon can resolve them
+CHANNEL: str | int = int(_first_channel) if _first_channel.lstrip("-").isdigit() else _first_channel
 # Session file is in the bot directory (parent of scripts) - matches config.py
 SESSION_NAME = str(Path(__file__).parent.parent / "signal_bot_session")
 
