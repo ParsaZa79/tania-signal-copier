@@ -12,8 +12,8 @@ class LogManager:
     def __init__(self):
         """Initialize the log manager."""
         self.connections: set[WebSocket] = set()
-        self.log_buffer: list[dict] = []  # Keep last 100 logs
-        self.max_buffer_size = 100
+        self.log_buffer: list[dict] = []
+        self.max_buffer_size = 10000
 
     async def connect(self, websocket: WebSocket) -> bool:
         """Accept and register a new WebSocket connection.

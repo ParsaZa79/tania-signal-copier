@@ -28,6 +28,8 @@ import {
   Activity,
   AlertCircle,
   CheckCircle,
+  Copy,
+  Check,
 } from "lucide-react";
 import { PageContainer, AnimatedSection } from "@/components/motion";
 import type { TrackedPosition } from "@/types";
@@ -58,6 +60,7 @@ export default function BotControlPage() {
   const logEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -130,10 +133,10 @@ export default function BotControlPage() {
 
             if (data.type === "history" && Array.isArray(data.logs)) {
               // Received buffered log history
-              setLogs(data.logs.slice(-100));
+              setLogs(data.logs);
             } else if (data.type === "log" && data.log) {
               // Single new log entry
-              setLogs((prev) => [...prev.slice(-99), data.log]);
+              setLogs((prev) => [...prev, data.log]);
             }
           } catch (err) {
             console.error("Failed to parse log message:", err);
@@ -257,7 +260,7 @@ export default function BotControlPage() {
 
   const addLog = (level: string, message: string) => {
     setLogs((prev) => [
-      ...prev.slice(-99), // Keep last 100 logs
+      ...prev,
       {
         id: `${Date.now()}-${Math.random()}`,
         level,
@@ -265,6 +268,20 @@ export default function BotControlPage() {
         timestamp: new Date().toLocaleTimeString(),
       },
     ]);
+  };
+
+  const handleCopyLogs = async () => {
+    const text = logs
+      .map((log) => {
+        const time = log.timestamp.includes("T")
+          ? new Date(log.timestamp).toLocaleTimeString()
+          : log.timestamp;
+        return `[${time}] ${log.message}`;
+      })
+      .join("\n");
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const getStatusColor = (s: BotStatusType) => {
@@ -530,24 +547,35 @@ export default function BotControlPage() {
                   </Badge>
                 )}
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setLogs([]);
-                  // Also clear server-side buffer
-                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                    wsRef.current.send("clear");
-                  }
-                }}
-              >
-                Clear
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleCopyLogs}
+                  disabled={logs.length === 0}
+                >
+                  {copied ? <Check className="w-4 h-4 mr-1" /> : <Copy className="w-4 h-4 mr-1" />}
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setLogs([]);
+                    // Also clear server-side buffer
+                    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                      wsRef.current.send("clear");
+                    }
+                  }}
+                >
+                  Clear
+                </Button>
+              </div>
             </CardTitle>
           </CardHeader>
 
           <CardContent className="p-0">
-            <div className="h-64 overflow-y-auto p-4 bg-bg-primary font-mono text-xs">
+            <div className="h-96 overflow-y-auto p-4 bg-bg-primary font-mono text-xs">
               {logs.length === 0 ? (
                 <div className="text-text-muted text-center py-8">
                   {wsConnected ? "Waiting for bot output..." : "Connecting to log stream..."}
