@@ -21,7 +21,7 @@ DEBUG_FILE = ANALYSIS_DIR / "signals_debug.md"
 
 CHECK_MARKS = ("\u2705", "\u2714", "\u2713")
 ENTRY_RE = re.compile(
-    "@\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(?:-|to|\\u2013|\\u2014)?\\s*([0-9]+(?:\\.[0-9]+)?)?",
+    r"(?:@|(?:buy|sell)\s+(?:at\s+)?)([0-9]+(?:\.[0-9]+)?)\s*(?:-|to|\u2013|\u2014)?\s*([0-9]+(?:\.[0-9]+)?)?",
     re.IGNORECASE,
 )
 SL_RE = re.compile(r"\bSL\b[:\s-]*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
@@ -32,6 +32,10 @@ TP_HIT_RE = re.compile(
 )
 TP_NUM_RE = re.compile(r"\btp\s*([0-9]+)\b|\btp([0-9]+)\b", re.IGNORECASE)
 PARTIAL_CLOSE_RE = re.compile(r"\bclose\s+([0-9]{1,3})\s*%", re.IGNORECASE)
+PROFIT_RE = re.compile(
+    r"(?:pips?\s+profit|profit\s+(?:secured|running)|close\s+(?:half|partial)|full\s+tp\s+hit)",
+    re.IGNORECASE,
+)
 
 SYMBOL_KEYWORDS = {
     "gold": "GOLD",
@@ -106,7 +110,8 @@ def extract_symbol(text: str) -> str:
         if keyword in lowered:
             return symbol
 
-    tokens = re.findall(r"\b[A-Z]{3,8}\b", text)
+    # Match symbols like XAUUSD, US100, NAS100, DJ30, US30CASH
+    tokens = re.findall(r"\b[A-Z][A-Z0-9]{1,9}\b", text)
     for token in tokens:
         if token not in EXCLUDED_TOKENS:
             return token
@@ -168,18 +173,22 @@ def contains_check_mark(text: str) -> bool:
 def detect_tp_hit(text: str) -> int | None:
     """Return TP number for TP-hit messages, or 0 for unnumbered TP hits."""
     lowered = text.lower()
-    if "tp" not in lowered:
-        return None
 
-    tp_hit = TP_HIT_RE.search(text) is not None or contains_check_mark(text)
-    if not tp_hit:
-        return None
+    # Explicit TP hit detection (text mentions "tp")
+    if "tp" in lowered:
+        tp_hit = TP_HIT_RE.search(text) is not None or contains_check_mark(text)
+        if tp_hit:
+            match = TP_NUM_RE.search(text)
+            if not match:
+                return 0
+            groups = [g for g in match.groups() if g]
+            return int(groups[0]) if groups else 0
 
-    match = TP_NUM_RE.search(text)
-    if not match:
+    # Profit/close messages with checkmarks (e.g. "CLOSE HALF FOR 44+ PIPS PROFIT ✅✅")
+    if contains_check_mark(text) and PROFIT_RE.search(text):
         return 0
-    groups = [g for g in match.groups() if g]
-    return int(groups[0]) if groups else 0
+
+    return None
 
 
 def classify_event(text: str, tp_hit_number: int | None) -> tuple[str | None, str | None]:
@@ -203,7 +212,7 @@ def classify_event(text: str, tp_hit_number: int | None) -> tuple[str | None, st
     if is_re_entry(text):
         return "re_entry", None
 
-    if "profit running" in lowered or "pips profit" in lowered:
+    if PROFIT_RE.search(text):
         return "profit_update", None
 
     return None, None
