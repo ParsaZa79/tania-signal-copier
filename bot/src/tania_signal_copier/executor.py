@@ -852,6 +852,7 @@ class MT5Executor:
 
         # Round to symbol's volume step
         sym_info = self._mt5.symbol_info(pos["symbol"])
+        volume_min = 0.0
         if sym_info:
             volume_step = sym_info.volume_step
             volume_min = sym_info.volume_min
@@ -859,6 +860,32 @@ class MT5Executor:
             close_volume = max(close_volume, volume_min)
             # Don't close more than we have
             close_volume = min(close_volume, current_volume)
+
+        # Safety guard:
+        # If rounding/min-volume constraints would turn a partial close into
+        # a full close, skip the action and wait for an explicit full_close.
+        epsilon = 1e-9
+        remaining_volume = current_volume - close_volume
+        if close_volume >= current_volume - epsilon:
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "Partial close skipped: calculated close volume would fully close position",
+                "ticket": ticket,
+                "closed_volume": 0.0,
+                "remaining_volume": current_volume,
+                "percentage": percentage,
+            }
+        if sym_info and remaining_volume < volume_min - epsilon:
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "Partial close skipped: remaining volume would be below symbol minimum",
+                "ticket": ticket,
+                "closed_volume": 0.0,
+                "remaining_volume": current_volume,
+                "percentage": percentage,
+            }
 
         tick = self._mt5.symbol_info_tick(pos["symbol"])
         if not tick:
@@ -900,6 +927,7 @@ class MT5Executor:
         return {
             "success": True,
             "ticket": ticket,
+            "skipped": False,
             "closed_volume": close_volume,
             "remaining_volume": remaining_volume,
             "closed_at": price,

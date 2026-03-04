@@ -795,6 +795,12 @@ class TelegramMT5Bot:
 
             result = self.executor.partial_close(pos.mt5_ticket, close_percentage)
             if result["success"]:
+                if result.get("skipped"):
+                    print(
+                        f"    {pos.role.value.upper()} {pos.mt5_ticket}: "
+                        f"Skipped - {result.get('reason', 'Partial close not applied')}"
+                    )
+                    continue
                 pos.lot_size = result["remaining_volume"]
                 print(f"    {pos.role.value.upper()} {pos.mt5_ticket}: Closed {result['closed_volume']} lots")
             else:
@@ -1620,6 +1626,12 @@ class TelegramMT5Bot:
 
             result = self.executor.partial_close(pos.mt5_ticket, signal.close_percentage)
             if result["success"]:
+                if result.get("skipped"):
+                    print(
+                        f"  {pos.role.value.upper()} {pos.mt5_ticket}: "
+                        f"Skipped: {result.get('reason', 'Partial close not applied')}"
+                    )
+                    continue
                 pos.lot_size = result["remaining_volume"]
                 any_success = True
                 print(f"  {pos.role.value.upper()} {pos.mt5_ticket}: Partial close successful")
