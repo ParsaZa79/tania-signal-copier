@@ -1,7 +1,0 @@
-[mcp_servers.dokploy]
-command = "npx"
-args = ["-y", "@sattva/dokploy-mcp"]
-
-[mcp_servers.dokploy.env]
-DOKPLOY_API_KEY = "LKLYorglOEAcNDgROhfYMwvltkqtWiVEzYVQSQyADClgbQFfbiWZNudcaFjoMNvc"
-DOKPLOY_URL = "https://www.kiaparsaprintingmoneymachine.cloud/"

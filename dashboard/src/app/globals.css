@@ -149,8 +149,6 @@ body {
 .animate-square-snake {
   /* backwards fill keeps staggered cells dim during their delay */
   animation: square-snake 1.5s ease-in-out infinite backwards;
-  will-change: opacity;
-  backface-visibility: hidden;
 }
 
 /* Amicro skeleton shimmer. CSS-driven for the same pre-hydration reason. */

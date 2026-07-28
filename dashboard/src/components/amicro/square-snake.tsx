@@ -1,9 +1,6 @@
 export const SquareSnake = () => {
   return (
-    <div
-      className="loader-surface grid h-10 w-10 grid-cols-3 gap-1"
-      aria-hidden="true"
-    >
+    <div className="grid h-10 w-10 grid-cols-3 grid-rows-3 gap-1" aria-hidden="true">
       {[
         [0, 0],
         [1, 0],
@@ -17,7 +14,7 @@ export const SquareSnake = () => {
       ].map(([x, y], i) => (
         <div
           key={i}
-          className="animate-square-snake h-full w-full rounded-sm bg-zinc-800 dark:bg-white"
+          className="animate-square-snake rounded-sm bg-zinc-800 dark:bg-white"
           style={{ animationDelay: `${(x + y) * 0.15}s` }}
         />
       ))}

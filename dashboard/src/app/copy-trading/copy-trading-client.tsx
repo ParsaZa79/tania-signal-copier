@@ -1067,7 +1067,6 @@ function ShareTradesView({ overview, loading, onSaved }: { overview: CopyOvervie
   const [message, setMessage] = useState<string | null>(null);
   const accounts = useMemo(() => overview?.accounts ?? [], [overview?.accounts]);
   const selectedAccountId = accountId || accounts[0]?.id || "";
-  const existing = overview?.owned_traders.find((item) => item.account_id === selectedAccountId);
 
   useEffect(() => {
     if (!selectedAccountId) return;
@@ -1095,18 +1094,22 @@ function ShareTradesView({ overview, loading, onSaved }: { overview: CopyOvervie
 
   if (loading) return <div className="flex min-h-72 flex-col items-center justify-center gap-4 text-sm text-text-muted"><PulseDots /> Loading your accounts…</div>;
   return (
-    <section role="tabpanel" aria-label="Share my trades" className="max-w-3xl">
-      <div className="mb-7"><h2 className="text-2xl font-semibold tracking-tight text-text-primary">Let others copy one of your accounts</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-text-muted">You stay in control. Turning sharing off stops new copied positions while existing copied positions can still receive protective changes and closes.</p></div>
+    <section role="tabpanel" aria-label="Share my trades" className="w-full">
+      <div className="mb-7 max-w-3xl"><h2 className="text-2xl font-semibold tracking-tight text-text-primary">Let others copy one of your accounts</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-text-muted">You stay in control. Turning sharing off stops new copied positions while existing copied positions can still receive protective changes and closes.</p></div>
       {accounts.length === 0 ? (
         <div className="rounded-2xl border border-border-subtle bg-bg-secondary/50 p-7"><h3 className="text-base font-semibold text-text-primary">Connect an MT5 account first</h3><p className="mt-2 text-sm text-text-muted">A trader profile can only use broker-derived activity from a connected account.</p></div>
       ) : (
         <div className="rounded-2xl border border-border-subtle bg-bg-secondary/55 p-6 sm:p-7">
-          <Select label="MT5 account" value={selectedAccountId} onValueChange={setAccountId} options={accounts.map((item) => ({ value: item.id, label: item.name }))} />
-          <div className="mt-5 grid gap-5 sm:grid-cols-2"><Input label="Public trader name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="e.g. Harbor Strategy" /><div className="rounded-xl border border-border-subtle bg-bg-tertiary/45 px-4 py-3"><p className="flex items-center gap-2 text-xs font-medium text-text-secondary"><BadgeCheck className="h-4 w-4 text-success" /> Broker-derived performance</p><p className="mt-1 text-xs leading-5 text-text-muted">Returns, largest drop, and trading history cannot be edited.</p></div></div>
-          <div className="mt-5"><Textarea className="min-h-28 font-sans" label="Short description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Explain your trading approach in plain language." rows={4} /></div>
-          <label className="mt-5 flex items-start justify-between gap-5 rounded-xl border border-border-subtle p-4"><span><span className="block text-sm font-semibold text-text-primary">Allow others to copy my trades</span><span className="mt-1 block text-xs leading-5 text-text-muted">When enabled, this profile appears in search and new MT5 trades can be copied.</span></span><input type="checkbox" checked={isCopyable} onChange={(event) => setIsCopyable(event.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-[var(--accent)]" /></label>
+          <div className="grid gap-5 lg:grid-cols-2">
+            <Select label="MT5 account" value={selectedAccountId} onValueChange={setAccountId} options={accounts.map((item) => ({ value: item.id, label: item.name }))} />
+            <Input label="Public trader name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="e.g. Harbor Strategy" />
+          </div>
+          <div className="mt-5 grid items-stretch gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
+            <Textarea className="min-h-28 font-sans" label="Short description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Explain your trading approach in plain language." rows={4} />
+            <label className="flex h-full items-start justify-between gap-5 rounded-xl border border-border-subtle p-4"><span><span className="block text-sm font-semibold text-text-primary">Allow others to copy my trades</span><span className="mt-1 block text-xs leading-5 text-text-muted">When enabled, this profile appears in search and new MT5 trades can be copied.</span></span><input type="checkbox" checked={isCopyable} onChange={(event) => setIsCopyable(event.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-[var(--accent)]" /></label>
+          </div>
           {message && <p role="status" className="mt-4 rounded-lg border border-border-subtle bg-bg-tertiary/40 px-4 py-3 text-sm text-text-secondary">{message}</p>}
-          <div className="mt-6 flex items-center justify-between gap-4"><p className="text-xs text-text-muted">{existing?.stats_updated_at ? "Statistics update from the connected broker runtime." : "Statistics will appear after the runtime sends verified history."}</p><Button variant="accent" onClick={() => void submit()} disabled={saving || !displayName.trim()}>{saving && <IOSSpinner size={16} />} Save sharing settings</Button></div>
+          <div className="mt-6 flex justify-end"><Button variant="accent" onClick={() => void submit()} disabled={saving || !displayName.trim()}>{saving && <IOSSpinner size={16} />} Save sharing settings</Button></div>
         </div>
       )}
     </section>

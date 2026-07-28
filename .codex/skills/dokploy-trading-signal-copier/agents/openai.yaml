@@ -1,4 +1,0 @@
-interface:
-  display_name: "Dokploy Trading Signal Copier"
-  short_description: "Use Dokploy CLI safely for this repo"
-  default_prompt: "Use $dokploy-trading-signal-copier to inspect how this repo is deployed in Dokploy."
