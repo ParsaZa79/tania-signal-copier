@@ -40,6 +40,8 @@ class PriceResponse(BaseModel):
     ask: float
     spread: float
     daily_open: float | None = None
+    daily_high: float | None = None
+    daily_low: float | None = None
     daily_change_percent: float | None = None
 
 
@@ -57,8 +59,6 @@ PRIORITY_SYMBOLS = [
 ]
 
 TIMEFRAME_D1 = 16408
-
-
 def _get_symbol_label(symbol: str) -> str:
     """Get a display label for a symbol."""
     base = to_base_symbol(symbol)
@@ -82,14 +82,18 @@ def _rate_value(rate, key: str) -> float | None:
         return None
 
 
-def _daily_open(executor, symbol: str) -> float | None:
+def _daily_bar(executor, symbol: str) -> dict[str, float | None]:
     try:
         rates = executor._mt5.copy_rates_from_pos(symbol, TIMEFRAME_D1, 0, 1)
     except Exception:
-        return None
+        return {"open": None, "high": None, "low": None}
     if rates is None or len(rates) == 0:
-        return None
-    return _rate_value(rates[0], "open")
+        return {"open": None, "high": None, "low": None}
+    return {
+        "open": _rate_value(rates[0], "open"),
+        "high": _rate_value(rates[0], "high"),
+        "low": _rate_value(rates[0], "low"),
+    }
 
 
 @router.get("/", response_model=list[SymbolListItem])
@@ -183,7 +187,8 @@ async def get_symbol_price(symbol: str, executor: MT5ExecutorDependency) -> Pric
         raise HTTPException(status_code=503, detail=f"Could not get price for {symbol}")
 
     spread = round((tick.ask - tick.bid) / info["info"].point, 1)
-    daily_open = _daily_open(executor, actual_symbol)
+    daily_bar = _daily_bar(executor, actual_symbol)
+    daily_open = daily_bar["open"]
     daily_change_percent = (
         ((tick.bid - daily_open) / daily_open) * 100
         if daily_open and daily_open > 0
@@ -195,5 +200,7 @@ async def get_symbol_price(symbol: str, executor: MT5ExecutorDependency) -> Pric
         ask=tick.ask,
         spread=spread,
         daily_open=daily_open,
+        daily_high=daily_bar["high"],
+        daily_low=daily_bar["low"],
         daily_change_percent=daily_change_percent,
     )

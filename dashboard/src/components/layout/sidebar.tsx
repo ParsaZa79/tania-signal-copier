@@ -26,16 +26,13 @@ import { Button } from "@/components/ui/button";
 const SIDEBAR_EXPANDED_KEY = "signal-copier:sidebar-expanded";
 
 const mobileNavItems = [
-  { href: "/", label: "Overview", icon: House },
-  { href: "/copy-trading", label: "Copy traders", icon: Repeat2 },
-  { href: "/config", label: "Account setup", icon: Sliders },
-  { href: "/positions", label: "Positions", icon: Activity },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/", label: "Home", icon: House },
+  { href: "/copy-trading", label: "Copy", icon: Repeat2 },
+  { href: "/orders", label: "Trade", icon: Plus },
 ];
 
 const portfolioRoutes = [
   { href: "/positions", label: "Open positions", description: "Trades currently open", icon: Activity },
-  { href: "/orders", label: "New order", description: "Place a trade yourself", icon: Plus },
   { href: "/history", label: "Trade history", description: "Past trades and results", icon: History },
 ];
 
@@ -46,6 +43,11 @@ const accountRoutes = [
 ];
 
 type MenuRoute = (typeof portfolioRoutes)[number] | (typeof accountRoutes)[number];
+type MobileMenu = "portfolio" | "account";
+
+export function isNavigationPathActive(pathname: string, href: string) {
+  return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
+}
 
 function CollapsedHint({ label, show }: { label: string; show: boolean }) {
   if (!show) return null;
@@ -188,6 +190,7 @@ export function Sidebar({ isConnected, accountName = "Live Account", accountInit
     .map((word) => word[0]?.toUpperCase())
     .join("") || "A";
   const copyActive = pathname.startsWith("/copy-trading");
+  const tradeActive = isNavigationPathActive(pathname, "/orders");
   const portfolioActive = portfolioRoutes.some((route) => pathname.startsWith(route.href));
   const accountActive = accountRoutes.some((route) => pathname.startsWith(route.href));
 
@@ -313,6 +316,24 @@ export function Sidebar({ isConnected, accountName = "Live Account", accountInit
               <CollapsedHint label="Copy" show={collapsed} />
             </Link>
           </li>
+          <li>
+            <Link
+              href="/orders"
+              aria-current={tradeActive ? "page" : undefined}
+              className={cn(
+                "group relative flex flex-col items-center justify-center rounded-[12px] border font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70 motion-reduce:transition-none",
+                animationEnabled && "transition-[width,height,gap,background-color,border-color,color,box-shadow] duration-[180ms] ease-[cubic-bezier(0.77,0,0.175,1)]",
+                collapsed ? "h-12 w-12 gap-0" : "h-[82px] w-[76px] gap-2 text-[11px]",
+                tradeActive
+                  ? "border-accent/30 bg-[linear-gradient(145deg,rgba(124,142,255,0.25),rgba(72,92,165,0.16))] text-text-primary shadow-[0_12px_32px_rgba(70,130,255,0.14)]"
+                  : "border-transparent text-text-muted hover:border-border-subtle hover:bg-bg-elevated/60 hover:text-text-primary"
+              )}
+            >
+              <Plus className={cn("h-[19px] w-[19px]", tradeActive && "text-accent")} />
+              <RailLabel collapsed={collapsed}>Trade</RailLabel>
+              <CollapsedHint label="Trade" show={collapsed} />
+            </Link>
+          </li>
           <RailMenu
             active={portfolioActive}
             animate={animationEnabled}
@@ -363,21 +384,191 @@ export function Sidebar({ isConnected, accountName = "Live Account", accountInit
 
 export function MobileNav() {
   const pathname = usePathname();
+  const [openMenu, setOpenMenu] = useState<MobileMenu | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const portfolioTriggerRef = useRef<HTMLButtonElement>(null);
+  const accountTriggerRef = useRef<HTMLButtonElement>(null);
+  const portfolioActive = portfolioRoutes.some((route) =>
+    isNavigationPathActive(pathname, route.href)
+  );
+  const accountActive = accountRoutes.some((route) => isNavigationPathActive(pathname, route.href));
+  const menuRoutes = openMenu === "portfolio" ? portfolioRoutes : accountRoutes;
+  const menuTitle = openMenu === "portfolio" ? "Portfolio" : "Account";
+
+  useEffect(() => {
+    if (!openMenu) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLElement>("a[href]")?.focus();
+    });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        const trigger =
+          openMenu === "portfolio" ? portfolioTriggerRef.current : accountTriggerRef.current;
+        setOpenMenu(null);
+        window.requestAnimationFrame(() => trigger?.focus());
+      }
+    };
+    const handleOutsidePress = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        menuRef.current?.contains(target) ||
+        portfolioTriggerRef.current?.contains(target) ||
+        accountTriggerRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setOpenMenu(null);
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("pointerdown", handleOutsidePress);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("pointerdown", handleOutsidePress);
+    };
+  }, [openMenu]);
+
+  const closeMenu = (restoreFocus = false) => {
+    const closingMenu = openMenu;
+    setOpenMenu(null);
+    if (restoreFocus && closingMenu) {
+      const trigger =
+        closingMenu === "portfolio" ? portfolioTriggerRef.current : accountTriggerRef.current;
+      window.requestAnimationFrame(() => trigger?.focus());
+    }
+  };
+
+  const toggleMenu = (menu: MobileMenu) => {
+    if (openMenu === menu) {
+      closeMenu(true);
+      return;
+    }
+    setOpenMenu(menu);
+  };
+
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-border-default bg-bg-primary/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-xl md:hidden" aria-label="Mobile navigation">
-      <ul className="grid grid-cols-5 gap-1">
+    <nav
+      className="fixed inset-x-0 bottom-0 z-50 border-t border-border-default bg-bg-primary/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-xl md:hidden"
+      aria-label="Mobile navigation"
+    >
+      {openMenu ? (
+        <div
+          ref={menuRef}
+          id={`mobile-${openMenu}-menu`}
+          role="menu"
+          aria-label={menuTitle}
+          className="animate-fade-in fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom))] right-3 z-10 max-h-[calc(100vh-6rem)] w-[calc(100vw-1.5rem)] max-w-[270px] overflow-y-auto rounded-2xl border border-border-default bg-bg-secondary p-2 shadow-[0_24px_80px_rgba(0,0,0,0.72)] ring-1 ring-black/40"
+        >
+          <p className="px-3 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+            {menuTitle}
+          </p>
+          {menuRoutes.map((route) => {
+            const RouteIcon = route.icon;
+            const active = isNavigationPathActive(pathname, route.href);
+            return (
+              <Link
+                role="menuitem"
+                key={route.href}
+                href={route.href}
+                aria-current={active ? "page" : undefined}
+                onClick={() => closeMenu()}
+                className={cn(
+                  "group flex min-h-[56px] items-center gap-3 rounded-xl px-3 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70",
+                  active ? "bg-bg-elevated" : "hover:bg-bg-elevated"
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-bg-tertiary/70 text-text-secondary",
+                    active && "text-accent"
+                  )}
+                >
+                  <RouteIcon className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block text-sm font-medium text-text-primary">{route.label}</span>
+                  <span className="mt-0.5 block text-[11px] text-text-muted">{route.description}</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-text-muted transition-transform group-hover:translate-x-0.5" />
+              </Link>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <ul className="relative z-20 grid grid-cols-5 gap-1">
         {mobileNavItems.map((item) => {
           const Icon = item.icon;
-          const active = pathname === item.href || (item.href === "/copy-trading" && pathname.startsWith("/copy-trading"));
+          const active = isNavigationPathActive(pathname, item.href);
           return (
             <li key={item.href}>
-              <Link href={item.href} className={cn("flex min-h-12 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[10px]", active ? "bg-bg-elevated text-text-primary" : "text-text-muted")}>
-                <Icon className={cn("h-4 w-4", active && "text-accent")} />
-                <span className="max-w-full truncate">{item.label === "Account setup" ? "Account" : item.label.replace(" traders", "")}</span>
+              <Link
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                onClick={() => closeMenu()}
+                className={cn(
+                  "flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl px-1 text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70",
+                  active ? "bg-bg-elevated text-text-primary" : "text-text-muted hover:bg-bg-elevated/60 hover:text-text-primary",
+                  item.href === "/orders" && !active && "text-accent"
+                )}
+              >
+                <Icon className={cn("h-[18px] w-[18px]", active && "text-accent")} />
+                <span className="max-w-full truncate">{item.label}</span>
               </Link>
             </li>
           );
         })}
+        <li>
+          <button
+            ref={portfolioTriggerRef}
+            type="button"
+            aria-expanded={openMenu === "portfolio"}
+            aria-haspopup="menu"
+            aria-controls="mobile-portfolio-menu"
+            onClick={() => toggleMenu("portfolio")}
+            className={cn(
+              "flex min-h-[52px] w-full flex-col items-center justify-center gap-1 rounded-xl px-1 text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70",
+              portfolioActive || openMenu === "portfolio"
+                ? "bg-bg-elevated text-text-primary"
+                : "text-text-muted hover:bg-bg-elevated/60 hover:text-text-primary"
+            )}
+          >
+            <BookOpen
+              className={cn(
+                "h-[18px] w-[18px]",
+                (portfolioActive || openMenu === "portfolio") && "text-accent"
+              )}
+            />
+            <span className="max-w-full truncate">Portfolio</span>
+          </button>
+        </li>
+        <li>
+          <button
+            ref={accountTriggerRef}
+            type="button"
+            aria-expanded={openMenu === "account"}
+            aria-haspopup="menu"
+            aria-controls="mobile-account-menu"
+            onClick={() => toggleMenu("account")}
+            className={cn(
+              "flex min-h-[52px] w-full flex-col items-center justify-center gap-1 rounded-xl px-1 text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70",
+              accountActive || openMenu === "account"
+                ? "bg-bg-elevated text-text-primary"
+                : "text-text-muted hover:bg-bg-elevated/60 hover:text-text-primary"
+            )}
+          >
+            <CircleUserRound
+              className={cn(
+                "h-[18px] w-[18px]",
+                (accountActive || openMenu === "account") && "text-accent"
+              )}
+            />
+            <span className="max-w-full truncate">Account</span>
+          </button>
+        </li>
       </ul>
     </nav>
   );

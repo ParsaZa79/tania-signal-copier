@@ -1,55 +1,66 @@
-# Settings horizontal-overflow design QA
+# New order workspace design QA
 
-- Source visual truth: `/var/folders/6f/_j2cbcxx323gkcrcb10_cqg40000gn/T/codex-clipboard-859f2e97-ab0b-45ac-bbe4-0447434443c2.png`
-- Implementation screenshot: `/tmp/trading-settings-overflow-fixed.png`
-- Combined comparison: `/tmp/trading-settings-overflow-comparison.png`
-- Viewport: 1406 x 994 CSS px
-- Source pixels: 1406 x 994
-- Implementation pixels: 1406 x 994
-- Device scale/density normalization: 1:1 pixel comparison; no resampling between source and implementation
-- State: dark desktop settings page, connected MT5 account, connection-health panel visible
+- Source visual truth: `/Users/parsaz/.codex/generated_images/019faad3-b071-73d2-bdfa-2a4ddcf13e63/call_dLu4Y11W49CjxpIhKoyq7mU6.png`
+- Implementation screenshot: `/tmp/signal-copier-tradingview-advanced-final-v3.png`
+- Combined comparison: `/tmp/signal-copier-orders-comparison-tradingview.png`
+- Requested viewport: 1440 x 1024 CSS px
+- Captured viewport: 1434 x 1020 px after the in-app browser frame inset
+- Source pixels: 1487 x 1058, normalized to 1434 x 1020 for comparison
+- Implementation pixels: 1434 x 1020
+- Device scale/density normalization: both comparison halves are 1434 x 1020 at 1:1 density
+- State: authenticated dark desktop order route, XAUUSDb, Buy, Market, 0.01 lots, official TradingView Advanced Chart at 15 minutes
 
 ## Full-view comparison evidence
 
-The source shows the authenticated dashboard column extending past the right viewport edge, clipping the API badge, right-side status icons, account balance, and React version card. A page-level horizontal scrollbar is visible at the bottom. In the revised implementation, the same 1406 x 994 viewport contains the complete header, panel, two-column status grid, account balance, and four version cards. The document width equals the viewport width and no horizontal scrollbar is present.
+The final comparison places the selected first direction and the implementation side by side at the same pixel dimensions. Both preserve the existing dashboard shell while presenting the same two-column guided-order composition: numbered progress rail, instrument selector, paired direction and order-type controls, compact lot stepper, optional risk controls, order summary, blue review CTA, live quote header, candle chart, day range, and nearby-markets table.
+
+The implementation intentionally uses the product's existing typography, color tokens, symbol icons, sidebar, header, and live-account chrome. At the user's request, the compact chart from the selected concept has been replaced with TradingView's official Advanced Chart experience, so the right column is taller and scrolls to reveal the remaining market rows. Quote values and candle shapes differ because market data is time-sensitive and the chart uses TradingView's mapped venue.
 
 ## Focused-region evidence
 
-No separate crop was required because both screenshots are native 1406 x 994 captures and the affected right and bottom edges are readable in the 1:1 combined comparison. Browser measurements provide the focused edge evidence: the source document was 1480 px wide at a 1406 px viewport; the implementation document is 1406 px wide at the same viewport.
+No additional crop was required because the equal-size full-view comparison keeps both primary fidelity regions readable:
+
+- Left: the entire guided order ticket, including the complete primary CTA.
+- Right: live quote, TradingView top and drawing toolbars, candlestick plot, volume, date ranges, attribution, range indicator, and market table.
 
 ## Required fidelity surfaces
 
-- Fonts and typography: Existing font family, weights, sizes, line heights, labels, and numerical treatments are unchanged.
-- Spacing and layout rhythm: Existing padding, gaps, card radii, and grid structure are preserved. The main dashboard flex column now shrinks to the available width.
-- Colors and visual tokens: Existing background, border, text, accent, and semantic status tokens are unchanged.
-- Image and icon fidelity: Existing Lucide icons and symbol assets are unchanged; no image assets were added or replaced.
-- Copy and content: Existing settings copy is unchanged. The preview balance is fixture data and intentionally differs from the live-account value in the source capture.
+- Fonts and typography: existing dashboard font family and weights are retained; heading, label, numeric, and helper-text hierarchy closely follows the selected direction.
+- Spacing and layout rhythm: the 1.12 / 0.88 desktop split, 20 px section rhythm, compact 44 px controls, 64 px instrument card, and 390 px chart preserve the ticket while giving TradingView's toolbars enough usable space.
+- Colors and visual tokens: existing near-black surfaces, subtle borders, blue selection states, blue CTA, and green/red market semantics are preserved.
+- Image and icon fidelity: existing real flag, commodity, crypto, and Lucide assets are used. The chart is TradingView's official Advanced Chart widget with its native icons, toolbars, and attribution.
+- Copy and content: user-facing language follows the chosen direction and uses live broker labels and quote data.
+- Live data: the bid, ask, spread, day range, and nearby markets remain connected to MT5. The embedded chart maps broker symbols to suitable TradingView venues, including OANDA for FX/metals and Bitstamp for BTCUSD.
 
 ## Comparison history
 
 ### Iteration 1 — blocked
 
-- Finding: P1 page-level horizontal overflow on the settings route.
-- Evidence: 1406 px viewport, 1480 px document width; authenticated flex column measured 1368 px beside a 112 px sidebar.
-- Impact: Persistent controls and status values were clipped and required horizontal scrolling.
-- Fix: Added `min-w-0` to the authenticated dashboard flex column so it can shrink within the remaining viewport width. Added the settings route and representative connected health data to the existing design-preview mode for repeatable responsive QA.
+- Finding: P2 right column was too wide, the 250 px chart pushed the lower market rows out of view, risk controls lacked the selected direction's steppers, and the nearby-markets change column was missing.
+- Fix: adjusted the desktop grid proportions, added stop-loss and take-profit steppers, added the change column and four-row market table, and introduced the live chart component.
 
-### Iteration 2 — passed
+### Iteration 2 — blocked
 
-- Post-fix evidence: document and body fit within the 1406 px viewport with no horizontal overflow.
-- Responsive checks: no horizontal overflow at 1280, 1024, 768, or 390 px widths.
-- Browser errors: no new console errors appeared during an 11-second post-render observation. Earlier authentication errors predated the connected preview fixture.
-- Functional checks: settings route rendered the connection-health panel, all status rows, account balance, and version cards.
+- Finding: P2 vertical density left the review CTA touching the lower viewport edge; the instrument change label truncated; an unsuffixed BTCUSD quote produced repeated console errors.
+- Fix: reduced section gaps and core control heights, widened the market selector, preserved BTCUSD without a broker suffix, and reduced the chart to 220 px.
+
+### Iteration 3 — passed
+
+- Visual evidence: the final equal-size comparison shows the complete ticket and market context without clipping or overflow.
+- Interaction checks: Buy/Sell, Market/Pending, pending type and entry price, volume stepper, timeframe selection, nearby-market switching, and the review dialog all worked. The final placement action was intentionally not invoked because it would send a real broker order.
+- Responsive check: the core order controls and review CTA remain present at 390 x 844; the existing mobile navigation is retained.
+- Browser diagnostics: no application console errors remained after the BTCUSD compatibility fix.
+
+### Iteration 4 — passed
+
+- User feedback: the compact TradingView rendering engine did not look like TradingView's own platform.
+- Fix: replaced the custom Lightweight Charts presentation with the official TradingView Advanced Chart widget, including interval and candle controls, indicators, drawing tools, crosshair, volume, date ranges, UTC clock, and required attribution.
+- Functional evidence: XAUUSDb maps to `OANDA:XAUUSD`, EURUSDb maps to `OANDA:EURUSD`, nearby-market selection remounts the correct chart, and the 1-hour / 15-minute interval controls update inside the embedded widget.
+- Browser diagnostics: the application itself remained error-free. TradingView's embedded support-portal request returned a non-blocking 403 while the chart and controls continued to work.
+- Automated checks: dashboard lint, 37 dashboard tests, dashboard production build, 85 API tests with 36 skipped, and `git diff --check` passed.
 
 ## Findings
 
-No actionable P0, P1, or P2 visual differences remain for the requested overflow fix.
-
-## Implementation checklist
-
-- [x] Constrain the authenticated dashboard flex child with `min-w-0`.
-- [x] Verify the reported 1406 x 994 viewport.
-- [x] Verify desktop, tablet, and mobile breakpoints.
-- [x] Run dashboard tests, lint, and production build.
+No actionable P0, P1, or P2 visual or interaction differences remain for the selected direction.
 
 final result: passed

@@ -22,12 +22,18 @@ import type {
 } from "@/types";
 import { apiErrorFromResponse } from "./api-error";
 
-function toBrokerSymbol(symbol: string): string {
-  const normalized = symbol.trim().toUpperCase();
+export function toBrokerSymbol(symbol: string): string {
+  const trimmed = symbol.trim();
+  const normalized = trimmed.toUpperCase();
   if (!normalized) {
     return normalized;
   }
-  return normalized.endsWith("B") ? normalized : `${normalized}b`;
+  if (normalized === "BTCUSD") {
+    return normalized;
+  }
+  return normalized.endsWith("B")
+    ? `${normalized.slice(0, -1)}b`
+    : `${normalized}b`;
 }
 
 /**
@@ -348,6 +354,8 @@ export async function getSymbolPrice(
   ask: number;
   spread: number;
   daily_open?: number | null;
+  daily_high?: number | null;
+  daily_low?: number | null;
   daily_change_percent?: number | null;
 }> {
   return fetchApi(`/api/symbols/${toBrokerSymbol(symbol)}/price`);
