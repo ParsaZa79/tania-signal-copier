@@ -152,10 +152,17 @@ export function SymbolIcon({ symbol, size = "md", className }: SymbolIconProps) 
 
   if (resolved.kind === "financial-flag" && resolved.key) {
     return (
-      <div className={containerClass} title={symbol}>
+      <div
+        className={cn(
+          "flex shrink-0 items-center justify-center overflow-visible",
+          dimensions.box,
+          className
+        )}
+        title={symbol}
+      >
         <FinancialFlagIcon
           icon={resolved.key}
-          className="h-full w-full object-cover"
+          className="h-full w-full overflow-visible object-contain"
         />
       </div>
     );
