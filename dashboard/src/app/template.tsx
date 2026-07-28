@@ -1,24 +1,6 @@
-"use client";
-
-import { motion, useReducedMotion } from "framer-motion";
-import { pageVariants, pageTransition } from "@/lib/motion";
-
 export default function Template({ children }: { children: React.ReactNode }) {
-  const prefersReducedMotion = useReducedMotion();
-
-  if (prefersReducedMotion) {
-    return <>{children}</>;
-  }
-
-  return (
-    <motion.div
-      initial="initial"
-      animate="animate"
-      exit="exit"
-      variants={pageVariants}
-      transition={pageTransition}
-    >
-      {children}
-    </motion.div>
-  );
+  // Keep the route boundary paint-stable. Fading this full-size wrapper forces
+  // Safari and Firefox to repeatedly re-composite the entire scrollable page
+  // while initial account data and skeletons are settling.
+  return <>{children}</>;
 }

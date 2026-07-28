@@ -5,7 +5,8 @@ import { SetupHome } from "@/components/dashboard/setup-home";
 import { useDashboard } from "@/components/layout/dashboard-layout";
 
 export default function DashboardPage() {
-  const { positions, account, isConnected, reconnect, session, designPreview } = useDashboard();
+  const { positions, account, accountPending, isConnected, reconnect, session, designPreview } =
+    useDashboard();
   const needsSetup = !session.setupComplete || !session.activeAccountId;
 
   if (needsSetup) {
@@ -15,6 +16,7 @@ export default function DashboardPage() {
   return (
     <ConnectedHome
       account={account}
+      accountPending={accountPending}
       accountId={session.activeAccountId}
       email={session.user.email}
       isConnected={isConnected}

@@ -45,6 +45,8 @@ interface DashboardContextType {
   positions: Position[];
   account: AccountInfo | null;
   isConnected: boolean;
+  /** Still waiting on the first account report from the backend. */
+  accountPending: boolean;
   error: string | null;
   reconnect: () => void;
   session: AuthSession;
@@ -182,6 +184,7 @@ function CopyTradingPreviewLayout({ children }: DashboardLayoutProps) {
         positions: [],
         account: previewAccount,
         isConnected: true,
+        accountPending: false,
         error: null,
         reconnect: () => undefined,
         session: previewSession,
@@ -280,6 +283,7 @@ function DashboardPreviewLayout({
         positions: previewPositions,
         account: previewAccount,
         isConnected: connected,
+        accountPending: false,
         error: null,
         reconnect: () => undefined,
         session: previewSession,
@@ -496,7 +500,7 @@ function AuthenticatedDashboardLayout({
   const isSetupRoute = pathname.startsWith("/setup");
   const needsSetup = !session.setupComplete || !session.activeAccountId;
   const shouldForceSetup = needsSetup && !isSetupRoute;
-  const { positions, account, isConnected, error, reconnect } = useWebSocket({
+  const { positions, account, isConnected, hasSnapshot, error, reconnect } = useWebSocket({
     enabled: session.setupComplete && Boolean(session.activeAccountId),
     token: session.token,
     accountId: session.activeAccountId,
@@ -517,6 +521,8 @@ function AuthenticatedDashboardLayout({
     session.accounts[0];
   const visibleActiveAccount = needsSetup ? null : activeAccount;
   const mt5Connected = isConnected && account !== null;
+  // An error means the backend has effectively answered, so stop waiting.
+  const accountPending = !hasSnapshot && error === null;
 
   useEffect(() => {
     if (shouldForceSetup) {
@@ -621,7 +627,7 @@ function AuthenticatedDashboardLayout({
 
   return (
     <DashboardContext.Provider
-      value={{ positions, account, isConnected: mt5Connected, error, reconnect, session, setSession }}
+      value={{ positions, account, isConnected: mt5Connected, accountPending, error, reconnect, session, setSession }}
     >
       <div className="flex min-h-screen">
         <Sidebar

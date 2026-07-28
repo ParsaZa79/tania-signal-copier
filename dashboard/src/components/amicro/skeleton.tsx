@@ -15,7 +15,7 @@ export function Skeleton({ className, delayMs }: SkeletonProps) {
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-md bg-bg-tertiary/50",
+        "loader-surface relative overflow-hidden rounded-md bg-bg-tertiary/50",
         className
       )}
       aria-hidden="true"

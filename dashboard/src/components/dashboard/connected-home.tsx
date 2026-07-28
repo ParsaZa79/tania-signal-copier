@@ -31,6 +31,7 @@ import type {
 
 interface ConnectedHomeProps {
   account: AccountInfo | null;
+  accountPending?: boolean;
   accountId: string | null;
   email: string;
   isConnected: boolean;
@@ -287,6 +288,7 @@ function dashboardReadiness(
 
 export function ConnectedHome({
   account,
+  accountPending = false,
   accountId,
   email,
   isConnected,
@@ -449,6 +451,14 @@ export function ConnectedHome({
                     <span className="ml-1 font-normal text-text-muted">this week</span>
                   </p>
                 </>
+              ) : accountPending ? (
+                <div role="status" aria-label="Loading account data">
+                  <Skeleton className="mt-2 h-12 w-56 rounded-lg" />
+                  <div className="mt-7 min-h-[190px]">
+                    <Skeleton className="h-[190px] rounded-xl" delayMs={120} />
+                  </div>
+                  <Skeleton className="mt-4 h-6 w-44 rounded-lg" delayMs={240} />
+                </div>
               ) : (
                 <div className="flex min-h-[290px] flex-col items-start justify-center">
                   <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border-subtle bg-bg-tertiary/70 text-text-muted">

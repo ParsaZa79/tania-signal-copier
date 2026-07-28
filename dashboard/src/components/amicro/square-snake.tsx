@@ -1,6 +1,9 @@
 export const SquareSnake = () => {
   return (
-    <div className="grid h-10 w-10 grid-cols-3 gap-1" aria-hidden="true">
+    <div
+      className="loader-surface grid h-10 w-10 grid-cols-3 gap-1"
+      aria-hidden="true"
+    >
       {[
         [0, 0],
         [1, 0],

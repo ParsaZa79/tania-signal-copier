@@ -5,7 +5,10 @@ import { motion } from "framer-motion";
 
 export const PulseDots = ({ className }: { className?: string }) => {
   return (
-    <div className={cn("flex space-x-1.5", className)} aria-hidden="true">
+    <div
+      className={cn("loader-surface flex space-x-1.5", className)}
+      aria-hidden="true"
+    >
       {[0, 1, 2].map((i) => (
         <motion.div
           key={i}

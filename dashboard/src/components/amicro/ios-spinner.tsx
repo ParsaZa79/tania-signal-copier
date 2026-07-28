@@ -15,7 +15,7 @@ interface IOSSpinnerProps {
  */
 export const IOSSpinner = ({ size = 32, className }: IOSSpinnerProps) => (
   <span
-    className={cn("relative inline-block shrink-0", className)}
+      className={cn("loader-surface relative inline-block shrink-0", className)}
     style={{ width: size, height: size }}
     aria-hidden="true"
   >

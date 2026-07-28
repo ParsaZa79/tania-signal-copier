@@ -1,10 +1,7 @@
-"use client";
+import type { HTMLAttributes, ReactNode } from "react";
 
-import { motion, useReducedMotion, type HTMLMotionProps } from "framer-motion";
-import { staggerItem } from "@/lib/motion";
-
-type AnimatedSectionProps = HTMLMotionProps<"div"> & {
-  children: React.ReactNode;
+type AnimatedSectionProps = HTMLAttributes<HTMLDivElement> & {
+  children: ReactNode;
   className?: string;
 };
 
@@ -13,21 +10,9 @@ export function AnimatedSection({
   className,
   ...props
 }: AnimatedSectionProps) {
-  const prefersReducedMotion = useReducedMotion();
-
-  if (prefersReducedMotion) {
-    return <div className={className}>{children}</div>;
-  }
-
   return (
-    <motion.div
-      className={className}
-      variants={staggerItem}
-      initial="initial"
-      animate="animate"
-      {...props}
-    >
+    <div className={className} {...props}>
       {children}
-    </motion.div>
+    </div>
   );
 }

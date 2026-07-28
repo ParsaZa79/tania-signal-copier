@@ -9,6 +9,7 @@ interface UseWebSocketReturn {
   positions: Position[];
   account: AccountInfo | null;
   isConnected: boolean;
+  hasSnapshot: boolean;
   error: string | null;
   reconnect: () => void;
 }
@@ -23,6 +24,12 @@ export interface WebSocketFeedState {
   positions: Position[];
   account: AccountInfo | null;
   isConnected: boolean;
+  /**
+   * True once the backend has reported on the account at least once. Until
+   * then a null account means "not heard back yet" rather than "MT5 is down",
+   * which lets the UI show a loader instead of a disconnected state.
+   */
+  hasSnapshot: boolean;
   error: string | null;
 }
 
@@ -37,6 +44,7 @@ const initialFeedState: WebSocketFeedState = {
   positions: [],
   account: null,
   isConnected: false,
+  hasSnapshot: false,
   error: null,
 };
 
@@ -72,6 +80,7 @@ export function reduceWebSocketFeedState(
           positions,
           account,
           isConnected: account !== null,
+          hasSnapshot: true,
           error: null,
         };
       }
@@ -81,10 +90,17 @@ export function reduceWebSocketFeedState(
           positions,
           account,
           isConnected: account !== null,
+          hasSnapshot: true,
         };
       }
       if (status === "disconnected") {
-        return { ...state, positions, account: null, isConnected: false };
+        return {
+          ...state,
+          positions,
+          account: null,
+          isConnected: false,
+          hasSnapshot: true,
+        };
       }
 
       // Backwards compatibility for servers that predate explicit status.
@@ -93,6 +109,7 @@ export function reduceWebSocketFeedState(
         positions,
         account,
         isConnected: message.account != null,
+        hasSnapshot: true,
       };
     }
   }

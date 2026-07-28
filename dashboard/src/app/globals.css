@@ -149,21 +149,32 @@ body {
 .animate-square-snake {
   /* backwards fill keeps staggered cells dim during their delay */
   animation: square-snake 1.5s ease-in-out infinite backwards;
+  will-change: opacity;
+  backface-visibility: hidden;
 }
 
 /* Amicro skeleton shimmer. CSS-driven for the same pre-hydration reason. */
 @keyframes skeleton-shimmer {
   from {
-    transform: translateX(-150%);
+    transform: translate3d(-150%, 0, 0);
   }
   to {
-    transform: translateX(150%);
+    transform: translate3d(150%, 0, 0);
   }
 }
 
 .animate-skeleton-shimmer {
   /* backwards fill keeps staggered sweeps off-screen during their delay */
   animation: skeleton-shimmer 1.6s ease-in-out infinite backwards;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* Firefox and Safari re-rasterise every backdrop-filter surface an animation
+   sits inside, so an unconfined shimmer reads as a page-wide flicker. Paint
+   containment keeps each sweep's repaints inside its own placeholder. */
+.loader-surface {
+  contain: paint;
 }
 
 /* Gradient mesh background */
@@ -230,9 +241,12 @@ body {
   color: var(--text-primary);
 }
 
-/* Smooth transitions */
-* {
-  transition-property: background-color, border-color, color, fill, stroke, opacity, box-shadow, transform;
+/* Keep default control transitions off layout/compositing properties. A global
+   opacity/transform transition makes hydration and async first-paint changes
+   flash whole layers in Safari and Firefox. Components that intentionally move
+   or fade declare their own transition utility. */
+:where(a, button, input, select, textarea) {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 150ms;
 }

@@ -17,6 +17,7 @@ const emptyState: WebSocketFeedState = {
   positions: [],
   account: null,
   isConnected: false,
+  hasSnapshot: false,
   error: null,
 };
 
@@ -26,6 +27,26 @@ describe("reduceWebSocketFeedState", () => {
 
     expect(state.isConnected).toBe(false);
     expect(state.account).toBeNull();
+    expect(state.hasSnapshot).toBe(false);
+  });
+
+  it("records a snapshot even when the backend reports MT5 as disconnected", () => {
+    const state = reduceWebSocketFeedState(emptyState, {
+      type: "update",
+      message: {
+        type: "update",
+        timestamp: "2026-07-21T00:00:00Z",
+        account: null,
+        connection: {
+          status: "disconnected",
+          stale: false,
+          last_success_at: null,
+        },
+      },
+    });
+
+    expect(state.account).toBeNull();
+    expect(state.hasSnapshot).toBe(true);
   });
 
   it("connects only after receiving a valid account snapshot", () => {

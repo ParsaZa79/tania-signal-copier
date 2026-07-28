@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono } from "next/font/google";
 import { AuthKitProvider } from "@workos-inc/authkit-nextjs/components";
 import "./globals.css";
@@ -13,6 +13,14 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Signal Copier | Dashboard",
   description: "Beginner-first MT5 copy trading dashboard",
+};
+
+// Emitted into <head> ahead of the stylesheet link, so the browser starts on a
+// dark canvas. Without it Firefox and Safari paint their default white page for
+// as long as globals.css takes to arrive, which reads as a flash on first load.
+export const viewport: Viewport = {
+  colorScheme: "dark",
+  themeColor: "#050506",
 };
 
 export default function RootLayout({

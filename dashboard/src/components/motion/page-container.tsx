@@ -1,7 +1,3 @@
-"use client";
-
-import { motion, useReducedMotion } from "framer-motion";
-import { staggerContainer } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 interface PageContainerProps {
@@ -10,20 +6,9 @@ interface PageContainerProps {
 }
 
 export function PageContainer({ children, className }: PageContainerProps) {
-  const prefersReducedMotion = useReducedMotion();
-
-  if (prefersReducedMotion) {
-    return <div className={cn("w-full min-w-0 space-y-6", className)}>{children}</div>;
-  }
-
   return (
-    <motion.div
-      className={cn("w-full min-w-0 space-y-6", className)}
-      variants={staggerContainer}
-      initial="initial"
-      animate="animate"
-    >
+    <div className={cn("w-full min-w-0 space-y-6", className)}>
       {children}
-    </motion.div>
+    </div>
   );
 }
