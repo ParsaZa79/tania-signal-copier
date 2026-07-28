@@ -134,6 +134,23 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Amicro square-snake loader. Driven by CSS rather than Motion so it keeps
+   animating on slow connections, before the JS bundle hydrates. */
+@keyframes square-snake {
+  0%,
+  100% {
+    opacity: 0.1;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-square-snake {
+  /* backwards fill keeps staggered cells dim during their delay */
+  animation: square-snake 1.5s ease-in-out infinite backwards;
+}
+
 /* Gradient mesh background */
 .bg-mesh {
   background:
