@@ -1,6 +1,7 @@
 """FastAPI main application."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
@@ -20,6 +21,7 @@ from .dependencies import (
     restore_account_executor,
     set_mt5_executor_factory,
 )
+from .logging_filters import SuppressSymbolPriceAccessLog
 from .routers import (
     access,
     account,
@@ -46,6 +48,10 @@ from .websocket.manager import manager
 # Background task reference
 _broadcaster_task: asyncio.Task | None = None
 _copy_worker_task: asyncio.Task | None = None
+
+# Price polling is intentionally frequent and drowns out actionable API access
+# entries. Keep the requests working while omitting only those access-log lines.
+logging.getLogger("uvicorn.access").addFilter(SuppressSymbolPriceAccessLog())
 
 
 @asynccontextmanager

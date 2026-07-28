@@ -5,6 +5,11 @@ const nextConfig: NextConfig = {
   // stage copies this traced output instead of exporting the full dependency
   // tree used during compilation.
   output: "standalone",
+  logging: {
+    incomingRequests: {
+      ignore: [/^\/api\/symbols\/[^/]+\/price(?:\?.*)?$/],
+    },
+  },
 };
 
 export default nextConfig;

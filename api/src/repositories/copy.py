@@ -130,6 +130,12 @@ async def require_account_role(
     return membership
 
 
+async def _flush_and_refresh(session: AsyncSession, record: Any) -> None:
+    """Load server-managed timestamps before synchronous response serialization."""
+    await session.flush()
+    await session.refresh(record)
+
+
 def serialize_trader(profile: CopyTraderProfile, follower_count: int = 0) -> dict[str, Any]:
     stats = profile.statistics or {}
     return {
@@ -247,7 +253,7 @@ async def upsert_trader(
         ).all()
         for subscription in subscriptions:
             subscription.status = CopySubscriptionStatus.STOPPING
-    await session.flush()
+    await _flush_and_refresh(session, profile)
     return profile
 
 
@@ -279,7 +285,7 @@ async def update_trader_statistics(
         dict.fromkeys(market.strip().upper() for market in markets if market.strip())
     )
     profile.stats_updated_at = datetime.now(UTC)
-    await session.flush()
+    await _flush_and_refresh(session, profile)
     return profile
 
 
@@ -317,7 +323,7 @@ async def patch_trader(
         ).all()
         for subscription in subscriptions:
             subscription.status = CopySubscriptionStatus.STOPPING
-    await session.flush()
+    await _flush_and_refresh(session, profile)
     return profile
 
 
@@ -359,7 +365,7 @@ async def save_risk_policy(
         setattr(policy, field, next_value)
     policy.require_stop_loss = bool(values.get("require_stop_loss", True))
     policy.allowed_symbols = values.get("allowed_symbols") or []
-    await session.flush()
+    await _flush_and_refresh(session, policy)
     return policy
 
 
@@ -442,7 +448,7 @@ async def create_subscription(
     subscription.overlap_acknowledged = overlap_acknowledged
     subscription.country_code = country_code
     subscription.disclosure_version = disclosure_version
-    await session.flush()
+    await _flush_and_refresh(session, subscription)
     return subscription
 
 
@@ -504,7 +510,7 @@ async def patch_subscription(
         subscription.risk_preset = CopyRiskPreset(values["risk_preset"])
     if values.get("overlap_acknowledged") is not None:
         subscription.overlap_acknowledged = bool(values["overlap_acknowledged"])
-    await session.flush()
+    await _flush_and_refresh(session, subscription)
     return subscription
 
 
@@ -568,7 +574,7 @@ async def activate_live_subscription(
     subscription.country_code = country_code
     subscription.disclosure_version = disclosure_version
     subscription.live_activated_at = datetime.now(UTC)
-    await session.flush()
+    await _flush_and_refresh(session, subscription)
     return subscription
 
 
