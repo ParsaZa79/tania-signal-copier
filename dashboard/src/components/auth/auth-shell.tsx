@@ -10,16 +10,12 @@ const journey = [
 
 interface AuthShellProps {
   children: ReactNode;
-  securityCopy?: string;
 }
 
-export function AuthShell({
-  children,
-  securityCopy = "Your identity is managed by WorkOS and your credentials never pass through the trading API.",
-}: AuthShellProps) {
+export function AuthShell({ children }: AuthShellProps) {
   return (
     <main className="min-h-dvh overflow-hidden bg-[#050506] text-text-primary">
-      <div className="mx-auto grid min-h-dvh w-full max-w-[1680px] lg:grid-cols-[minmax(0,1.18fr)_minmax(500px,0.96fr)]">
+      <div className="grid min-h-dvh w-full lg:grid-cols-2">
         <section className="relative hidden min-h-dvh overflow-hidden border-r border-white/[0.09] lg:flex lg:flex-col lg:px-[clamp(3.5rem,6vw,6.75rem)] lg:py-[clamp(3.5rem,6vh,5.5rem)] [@media(max-height:800px)]:py-8">
           <div
             className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_70%_at_5%_38%,rgba(50,97,220,0.42),transparent_62%),radial-gradient(ellipse_55%_48%_at_42%_72%,rgba(38,86,201,0.16),transparent_68%),linear-gradient(135deg,#050506_0%,#071020_48%,#050506_100%)]"
@@ -89,16 +85,6 @@ export function AuthShell({
             </Link>
 
             {children}
-
-            <div className="mt-10 flex items-start gap-4 border-t border-white/[0.08] pt-8">
-              <ShieldCheck className="mt-0.5 h-9 w-9 shrink-0 text-[#829cff]" strokeWidth={1.8} />
-              <div>
-                <p className="text-sm font-medium text-[#a7a7ae]">Protected by secure verification</p>
-                <p className="mt-1 max-w-[400px] text-xs leading-relaxed text-[#6f6f77]">
-                  {securityCopy}
-                </p>
-              </div>
-            </div>
           </div>
         </section>
       </div>
