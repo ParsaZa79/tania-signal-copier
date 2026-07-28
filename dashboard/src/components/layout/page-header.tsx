@@ -1,5 +1,6 @@
 "use client";
 
+import { SquareSnake } from "@/components/amicro/square-snake";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
 
@@ -57,11 +58,14 @@ export function PageLoading({
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center min-h-[360px] gap-3",
+        "flex min-h-[360px] flex-col items-center justify-center gap-4",
         className
       )}
+      role="status"
+      aria-live="polite"
+      aria-label={label}
     >
-      <div className="w-8 h-8 rounded-full border-2 border-border-default border-t-text-primary animate-spin" />
+      <SquareSnake />
       <p className="text-sm text-text-muted">{label}</p>
     </div>
   );

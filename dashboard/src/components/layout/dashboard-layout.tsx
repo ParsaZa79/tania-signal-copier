@@ -29,6 +29,7 @@ import {
   type ReactNode,
 } from "react";
 import type { Position, AccountInfo } from "@/types";
+import { SquareSnake } from "@/components/amicro/square-snake";
 import { Bell, Search, ChevronDown, Loader2, LogOut, Plus, UserRound } from "lucide-react";
 
 interface PriceData {
@@ -408,10 +409,20 @@ function WorkOSDashboardLayout({ children }: DashboardLayoutProps) {
 
   if (authLoading || !user || tokenLoading || isLoading) {
     return (
-      <main className="min-h-screen bg-bg-primary flex items-center justify-center">
-        <p className="text-sm text-text-muted">
-          {authLoading || user ? "Loading dashboard..." : "Opening sign in..."}
-        </p>
+      <main className="flex min-h-screen items-center justify-center bg-bg-primary">
+        <div
+          className="flex flex-col items-center gap-4"
+          role="status"
+          aria-live="polite"
+          aria-label={
+            authLoading || user ? "Loading dashboard" : "Opening sign in"
+          }
+        >
+          <SquareSnake />
+          <p className="text-sm text-text-muted">
+            {authLoading || user ? "Loading dashboard…" : "Opening sign in…"}
+          </p>
+        </div>
       </main>
     );
   }
