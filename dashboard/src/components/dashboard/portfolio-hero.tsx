@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
+import { Skeleton } from "@/components/amicro/skeleton";
 import { getTradeHistory } from "@/lib/api";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import type { AccountInfo } from "@/types";
@@ -127,13 +128,13 @@ export function PortfolioHero({ account, floatingPnL, accountId }: PortfolioHero
             </div>
           </div>
         ) : (
-          <div className="h-12 w-48 rounded-lg bg-bg-tertiary animate-pulse" />
+          <Skeleton className="h-12 w-48 rounded-lg" />
         )}
       </div>
 
       <div className="px-2 pb-4 pt-2">
         {isLoading ? (
-          <div className="h-[120px] mx-4 rounded-xl bg-bg-tertiary/50 animate-pulse" />
+          <Skeleton className="mx-4 h-[120px] rounded-xl" />
         ) : (
           <EquityChart data={chartData} positive={isPositive} height={120} />
         )}

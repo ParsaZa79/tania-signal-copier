@@ -11,7 +11,6 @@ import {
   CircleAlert,
   Globe2,
   Info,
-  Loader2,
   LockKeyhole,
   Pause,
   Play,
@@ -24,6 +23,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
+import { PulseDots } from "@/components/amicro/pulse-dots";
 import { useDashboard } from "@/components/layout/dashboard-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -559,8 +560,9 @@ function CopyTradersView({
           </div>
         </div>
       ) : loading ? (
-        <div className="flex min-h-80 items-center justify-center text-sm text-text-muted">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading traders…
+        <div className="flex min-h-80 flex-col items-center justify-center gap-4 text-sm text-text-muted">
+          <PulseDots />
+          Loading traders…
         </div>
       ) : traders.length === 0 ? (
         <div className="rounded-2xl border border-border-subtle bg-bg-secondary/60 px-6 py-14 text-center">
@@ -1011,7 +1013,7 @@ function CopyWizard({
           </Button>
           {step === "account" && <Button variant="accent" onClick={() => setStep("risk")} disabled={!canReview}>Continue <ArrowRight className="h-4 w-4" /></Button>}
           {step === "risk" && <Button variant="accent" onClick={() => setStep("review")}>Review <ArrowRight className="h-4 w-4" /></Button>}
-          {step === "review" && <Button variant="accent" onClick={() => void submit()} disabled={saving || !liveChecksComplete}>{saving && <Loader2 className="h-4 w-4 animate-spin" />}{mode === "live" ? "Start live copying" : "Start paper copying"}</Button>}
+          {step === "review" && <Button variant="accent" onClick={() => void submit()} disabled={saving || !liveChecksComplete}>{saving && <IOSSpinner size={16} />}{mode === "live" ? "Start live copying" : "Start paper copying"}</Button>}
         </div>
       </div>
     </div>
@@ -1048,7 +1050,7 @@ function ActiveCopies({ subscriptions, accounts, onChanged }: { subscriptions: C
         {subscriptions.map((item) => (
           <div key={item.id} className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div><p className="text-sm font-medium text-text-primary">{item.trader_name}</p><p className="mt-1 text-xs text-text-muted">{accounts.find((account) => account.id === item.follower_account_id)?.name ?? "Trading account"} · {item.mode === "paper" ? "Paper copying" : "Live copying"} · {PRESET_DETAILS[item.risk_preset].title}</p></div>
-            <Button size="sm" variant="outline" onClick={() => void toggle(item)} disabled={updating === item.id}>{updating === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : item.status === "paused" ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}{item.status === "paused" ? "Resume" : "Pause new trades"}</Button>
+            <Button size="sm" variant="outline" onClick={() => void toggle(item)} disabled={updating === item.id}>{updating === item.id ? <IOSSpinner size={14} /> : item.status === "paused" ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}{item.status === "paused" ? "Resume" : "Pause new trades"}</Button>
           </div>
         ))}
       </div>
@@ -1091,7 +1093,7 @@ function ShareTradesView({ overview, loading, onSaved }: { overview: CopyOvervie
     }
   };
 
-  if (loading) return <div className="flex min-h-72 items-center justify-center text-sm text-text-muted"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading your accounts…</div>;
+  if (loading) return <div className="flex min-h-72 flex-col items-center justify-center gap-4 text-sm text-text-muted"><PulseDots /> Loading your accounts…</div>;
   return (
     <section role="tabpanel" aria-label="Share my trades" className="max-w-3xl">
       <div className="mb-7"><h2 className="text-2xl font-semibold tracking-tight text-text-primary">Let others copy one of your accounts</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-text-muted">You stay in control. Turning sharing off stops new copied positions while existing copied positions can still receive protective changes and closes.</p></div>
@@ -1104,7 +1106,7 @@ function ShareTradesView({ overview, loading, onSaved }: { overview: CopyOvervie
           <div className="mt-5"><Textarea className="min-h-28 font-sans" label="Short description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Explain your trading approach in plain language." rows={4} /></div>
           <label className="mt-5 flex items-start justify-between gap-5 rounded-xl border border-border-subtle p-4"><span><span className="block text-sm font-semibold text-text-primary">Allow others to copy my trades</span><span className="mt-1 block text-xs leading-5 text-text-muted">When enabled, this profile appears in search and new MT5 trades can be copied.</span></span><input type="checkbox" checked={isCopyable} onChange={(event) => setIsCopyable(event.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-[var(--accent)]" /></label>
           {message && <p role="status" className="mt-4 rounded-lg border border-border-subtle bg-bg-tertiary/40 px-4 py-3 text-sm text-text-secondary">{message}</p>}
-          <div className="mt-6 flex items-center justify-between gap-4"><p className="text-xs text-text-muted">{existing?.stats_updated_at ? "Statistics update from the connected broker runtime." : "Statistics will appear after the runtime sends verified history."}</p><Button variant="accent" onClick={() => void submit()} disabled={saving || !displayName.trim()}>{saving && <Loader2 className="h-4 w-4 animate-spin" />} Save sharing settings</Button></div>
+          <div className="mt-6 flex items-center justify-between gap-4"><p className="text-xs text-text-muted">{existing?.stats_updated_at ? "Statistics update from the connected broker runtime." : "Statistics will appear after the runtime sends verified history."}</p><Button variant="accent" onClick={() => void submit()} disabled={saving || !displayName.trim()}>{saving && <IOSSpinner size={16} />} Save sharing settings</Button></div>
         </div>
       )}
     </section>

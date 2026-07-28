@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, LockKeyhole } from "lucide-react";
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
+import { LockKeyhole } from "lucide-react";
 import { resetPassword } from "@/app/auth/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -85,7 +86,7 @@ export function WorkOSResetPasswordForm({ token }: WorkOSResetPasswordFormProps)
           type="submit"
           disabled={isSubmitting}
         >
-          {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+          {isSubmitting ? <IOSSpinner size={16} /> : null}
           {isSubmitting ? "Updating…" : "Update password"}
         </Button>
       </form>

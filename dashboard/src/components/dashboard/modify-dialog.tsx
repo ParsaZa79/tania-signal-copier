@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
 import { LegacyDialog as Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -136,7 +137,7 @@ function ModifyForm({
         >
           {isLoading ? (
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full border-2 border-bg-primary/30 border-t-bg-primary animate-spin" />
+              <IOSSpinner size={16} />
               <span>Saving...</span>
             </div>
           ) : (

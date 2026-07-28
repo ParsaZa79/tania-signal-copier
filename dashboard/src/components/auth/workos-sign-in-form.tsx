@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowLeft, Loader2, LockKeyhole, Mail } from "lucide-react";
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
+import { ArrowLeft, LockKeyhole, Mail } from "lucide-react";
 import { requestPasswordReset, signInWithPassword } from "@/app/auth/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -159,7 +160,7 @@ export function WorkOSSignInForm({
         ) : null}
 
         <Button className={primaryClass} variant="accent" type="submit" disabled={isSubmitting}>
-          {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+          {isSubmitting ? <IOSSpinner size={16} /> : null}
           {isSubmitting ? "Please wait…" : forgot ? "Send reset link" : "Sign in"}
         </Button>
       </form>

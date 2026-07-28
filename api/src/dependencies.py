@@ -117,6 +117,27 @@ def connect_account_executor(account_id: str, config_values: dict[str, str]) -> 
     return result
 
 
+def activate_account_runtime(account_id: str) -> dict:
+    """Make a configured account own the shared MT5 runtime.
+
+    Account credentials remain isolated on disk. Because the current deployment
+    has one MT5 terminal, switching accounts must explicitly re-authenticate that
+    terminal instead of leaving it bound to the previously selected account.
+    """
+    executor = get_executor_for_account_id(account_id)
+    if is_account_runtime_active(account_id, executor) and executor.is_alive():
+        return {"success": True, "connected": True, "health": executor.health_check()}
+
+    config = load_account_config(account_id, reveal_secrets=True)
+    if not all(config.get(key) for key in ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")):
+        return {
+            "success": False,
+            "connected": False,
+            "error": "Saved MT5 configuration is incomplete",
+        }
+    return connect_account_executor(account_id, config)
+
+
 def restore_account_executor(account_id: str) -> dict:
     """Restore the saved account runtime without displacing another account.
 
@@ -131,18 +152,7 @@ def restore_account_executor(account_id: str) -> dict:
             "error": "MT5 runtime is active for another account",
         }
 
-    executor = get_executor_for_account_id(account_id)
-    if is_account_runtime_active(account_id, executor) and executor.is_alive():
-        return {"success": True, "connected": True, "health": executor.health_check()}
-
-    config = load_account_config(account_id, reveal_secrets=True)
-    if not all(config.get(key) for key in ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")):
-        return {
-            "success": False,
-            "connected": False,
-            "error": "Saved MT5 configuration is incomplete",
-        }
-    return connect_account_executor(account_id, config)
+    return activate_account_runtime(account_id)
 
 
 def active_runtime_account_id() -> str | None:

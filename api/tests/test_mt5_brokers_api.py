@@ -17,19 +17,32 @@ def test_mt5_brokers_endpoint_validates_and_serializes_catalog(monkeypatch, tmp_
         mt5,
         "list_broker_servers",
         lambda: [
-            {"value": "Demo-Server", "label": "Demo Broker"},
-            {"value": "Learned-Server", "label": "Learned Broker", "source": "learned"},
+            {"value": "AMarkets-Real", "label": "AMarkets Real"},
+            {
+                "value": "AMarkets-Custom",
+                "label": "AMarkets Learned",
+                "source": "learned",
+            },
+            {"value": "Axiory-Live", "label": "Axiory Live"},
         ],
     )
 
     with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as client:
-        response = client.get("/api/mt5/brokers")
+        response = client.get("/api/mt5/brokers?page=1&page_size=1&query=amarkets")
 
     assert response.status_code == 200
     assert response.json() == {
         "success": True,
         "brokers": [
-            {"value": "Demo-Server", "label": "Demo Broker", "source": "seed"},
-            {"value": "Learned-Server", "label": "Learned Broker", "source": "learned"},
+            {"value": "AMarkets-Real", "label": "AMarkets Real", "source": "seed"},
+            {
+                "value": "AMarkets-Custom",
+                "label": "AMarkets Learned",
+                "source": "learned",
+            },
         ],
+        "page": 1,
+        "page_size": 1,
+        "total": 1,
+        "total_pages": 1,
     }

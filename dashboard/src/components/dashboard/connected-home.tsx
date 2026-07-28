@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   UsersRound,
 } from "lucide-react";
+import { Skeleton } from "@/components/amicro/skeleton";
 import { AnimatedSection, PageContainer } from "@/components/motion";
 import { EquityChart, buildEquityCurve } from "@/components/dashboard/equity-chart";
 import { getCopyOverview, getCopyRiskPolicy, getTradeHistory } from "@/lib/api";
@@ -415,7 +416,7 @@ export function ConnectedHome({
                   </p>
                   <div className="mt-7 min-h-[190px]">
                     {loading ? (
-                      <div className="h-[190px] animate-pulse rounded-xl bg-bg-tertiary/40" />
+                      <Skeleton className="h-[190px] rounded-xl" />
                     ) : (
                       <>
                         <div className="relative overflow-hidden">

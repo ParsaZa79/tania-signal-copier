@@ -1,13 +1,18 @@
 """MT5 connection management router."""
 
 from contextlib import suppress
+from math import ceil
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from ..account_store import get_active_account, load_account_config, save_account_config
-from ..broker_catalog import list_broker_servers, record_broker_server
+from ..broker_catalog import (
+    list_broker_servers,
+    paginate_broker_servers,
+    record_broker_server,
+)
 from ..dependencies import connect_account_executor
 
 router = APIRouter()
@@ -51,17 +56,39 @@ class MT5BrokerServer(BaseModel):
 class MT5BrokerServersResponse(BaseModel):
     success: bool
     brokers: list[MT5BrokerServer]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
 
 
 @router.get("/brokers", response_model=MT5BrokerServersResponse)
-async def list_mt5_broker_servers() -> MT5BrokerServersResponse:
+async def list_mt5_broker_servers(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=8, ge=1, le=24),
+    query: str = Query(default="", max_length=120),
+) -> MT5BrokerServersResponse:
     """List known MT5 broker servers.
 
     MetaTrader does not expose broker discovery through the Python API, so this
-    combines a seed catalog with servers learned from successful logins.
+    combines a seed catalog with servers learned from successful logins. Results
+    are filtered and paginated by broker brand so a brand's servers stay together.
     """
-    brokers = [MT5BrokerServer.model_validate(item) for item in list_broker_servers()]
-    return MT5BrokerServersResponse(success=True, brokers=brokers)
+    broker_page, total = paginate_broker_servers(
+        list_broker_servers(),
+        page=page,
+        page_size=page_size,
+        query=query,
+    )
+    brokers = [MT5BrokerServer.model_validate(item) for item in broker_page]
+    return MT5BrokerServersResponse(
+        success=True,
+        brokers=brokers,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=ceil(total / page_size),
+    )
 
 
 @router.post("/connect", response_model=MT5ConnectResponse)

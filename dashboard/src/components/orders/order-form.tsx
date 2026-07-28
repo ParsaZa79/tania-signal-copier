@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
+import { PulseDots } from "@/components/amicro/pulse-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -17,7 +19,6 @@ import {
   CheckCircle,
   TrendingUp,
   TrendingDown,
-  Loader2,
 } from "lucide-react";
 
 interface OrderFormProps {
@@ -132,7 +133,7 @@ export function OrderForm({ onSuccess, accountId, initialSymbol }: OrderFormProp
                 Symbol
               </label>
               <div className="h-11 rounded-xl bg-bg-tertiary border border-border-subtle flex items-center justify-center">
-                <Loader2 className="w-4 h-4 text-text-muted animate-spin" />
+                <PulseDots />
               </div>
             </div>
           ) : (
@@ -214,7 +215,7 @@ export function OrderForm({ onSuccess, accountId, initialSymbol }: OrderFormProp
           >
             {isLoading ? (
               <span className="flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <IOSSpinner size={16} />
                 Placing order…
               </span>
             ) : (

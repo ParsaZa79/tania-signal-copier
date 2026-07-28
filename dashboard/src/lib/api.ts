@@ -103,6 +103,11 @@ export async function activateAccount(accountId: string): Promise<{
   account: DashboardAccount;
   active_account_id: string | null;
   accounts: DashboardAccount[];
+  runtime: {
+    success: boolean;
+    connected: boolean;
+    error?: string | null;
+  };
 }> {
   return fetchApi(`/api/accounts/${encodeURIComponent(accountId)}/active`, {
     method: "PUT",
@@ -219,11 +224,31 @@ export async function connectMT5(
   });
 }
 
-export async function getMT5BrokerServers(): Promise<{
+export interface MT5BrokerServersPage {
   success: boolean;
   brokers: BrokerServerOption[];
-}> {
-  return fetchApi("/api/mt5/brokers");
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+}
+
+export async function getMT5BrokerServers({
+  page = 1,
+  pageSize = 8,
+  query = "",
+}: {
+  page?: number;
+  pageSize?: number;
+  query?: string;
+} = {}): Promise<MT5BrokerServersPage> {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  const normalizedQuery = query.trim();
+  if (normalizedQuery) params.set("query", normalizedQuery);
+  return fetchApi(`/api/mt5/brokers?${params.toString()}`);
 }
 
 // Positions

@@ -16,6 +16,7 @@ import {
   Trash2,
   TrendingUp,
 } from "lucide-react";
+import { PulseDots } from "@/components/amicro/pulse-dots";
 import { useDashboard } from "@/components/layout/dashboard-layout";
 import { SymbolIcon } from "@/components/dashboard/symbol-icon";
 import { ModifyDialog } from "@/components/dashboard/modify-dialog";
@@ -316,7 +317,10 @@ function PositionsPageContent() {
           {pendingOpen && (
             <div className="border-t border-border-subtle px-5 sm:px-8">
               {loadingPending ? (
-                <p className="py-6 text-sm text-text-muted">Loading pending orders…</p>
+                <div className="flex items-center gap-3 py-6 text-sm text-text-muted">
+                  <PulseDots />
+                  Loading pending orders…
+                </div>
               ) : pendingOrders.length === 0 ? (
                 <p className="py-6 text-sm text-text-muted">No pending orders are waiting.</p>
               ) : (

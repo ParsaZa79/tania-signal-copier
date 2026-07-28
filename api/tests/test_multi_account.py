@@ -6,6 +6,7 @@ from starlette.datastructures import Headers
 
 from src import access_store, account_store, dependencies, runtime_data, security
 from src.routers import access as access_router
+from src.routers import accounts as accounts_router
 
 
 def _isolate_storage(monkeypatch, tmp_path):
@@ -347,11 +348,24 @@ class _RuntimeExecutor:
         self.connected = connected
         self._mt5 = object() if connected else None
         self.disconnect_called = False
+        self.reconfigure_calls: list[dict] = []
 
     def disconnect(self) -> None:
         self.disconnect_called = True
         self.connected = False
         self._mt5 = None
+
+    def is_alive(self) -> bool:
+        return self.connected
+
+    def health_check(self) -> dict:
+        return {"connected": self.connected}
+
+    def reconfigure(self, **config) -> dict:
+        self.reconfigure_calls.append(config)
+        self.connected = True
+        self._mt5 = object()
+        return {"success": True, "connected": True, "health": self.health_check()}
 
 
 def test_mt5_executor_requires_account_to_own_runtime(monkeypatch):
@@ -373,6 +387,78 @@ def test_mt5_executor_requires_account_to_own_runtime(monkeypatch):
 
     assert exc_info.value.status_code == 503
     assert secondary.disconnect_called is True
+
+
+def test_activate_account_runtime_reconnects_saved_account_after_demo_takes_over(monkeypatch):
+    live = _RuntimeExecutor(connected=False)
+    demo = _RuntimeExecutor(connected=True)
+    monkeypatch.setattr(
+        dependencies,
+        "_mt5_executors",
+        {"live": live, "demo": demo},
+    )
+    monkeypatch.setattr(dependencies, "_active_runtime_account_id", "demo")
+    monkeypatch.setattr(
+        dependencies,
+        "load_account_config",
+        lambda account_id, reveal_secrets: {
+            "MT5_LOGIN": "111111",
+            "MT5_PASSWORD": "live-password",
+            "MT5_SERVER": "Broker-Live",
+        },
+    )
+
+    result = dependencies.activate_account_runtime("live")
+
+    assert result["connected"] is True
+    assert dependencies.active_runtime_account_id() == "live"
+    assert live.reconfigure_calls[0]["login"] == 111111
+    assert live.reconfigure_calls[0]["server"] == "Broker-Live"
+    assert demo.disconnect_called is True
+
+
+def test_activate_unconfigured_account_does_not_disconnect_existing_runtime(monkeypatch):
+    live = _RuntimeExecutor(connected=True)
+    unconfigured = _RuntimeExecutor(connected=False)
+    monkeypatch.setattr(
+        dependencies,
+        "_mt5_executors",
+        {"live": live, "new-demo": unconfigured},
+    )
+    monkeypatch.setattr(dependencies, "_active_runtime_account_id", "live")
+    monkeypatch.setattr(
+        dependencies,
+        "load_account_config",
+        lambda account_id, reveal_secrets: {},
+    )
+
+    result = dependencies.activate_account_runtime("new-demo")
+
+    assert result["connected"] is False
+    assert dependencies.active_runtime_account_id() == "live"
+    assert live.disconnect_called is False
+    assert unconfigured.reconfigure_calls == []
+
+
+async def test_active_account_route_reconnects_the_selected_runtime(monkeypatch, tmp_path):
+    _isolate_storage(monkeypatch, tmp_path)
+    user = security.create_user("owner@example.com", "correct horse battery")
+    live = account_store.create_account(user["id"], "Live Account")
+    demo = account_store.create_account(user["id"], "Demo Account")
+    account_store.set_user_active_account(user["id"], demo["id"])
+    runtime_calls: list[str] = []
+
+    def activate_runtime(account_id: str) -> dict:
+        runtime_calls.append(account_id)
+        return {"success": True, "connected": True, "health": {}}
+
+    monkeypatch.setattr(accounts_router, "activate_account_runtime", activate_runtime)
+
+    result = await accounts_router.set_active_account(live["id"], current_user=user)
+
+    assert result["active_account_id"] == live["id"]
+    assert result["runtime"] == {"success": True, "connected": True, "error": None}
+    assert runtime_calls == [live["id"]]
 
 
 def test_restore_account_executor_reconnects_saved_runtime_without_displacing_another(

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo, Fragment } from "react";
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
+import { Skeleton } from "@/components/amicro/skeleton";
 import { PageHeader, SectionPanel, PanelHeader, PanelBody, EmptyState } from "@/components/layout";
 import { useDashboard } from "@/components/layout/dashboard-layout";
 import { MetricCard } from "@/components/dashboard/metric-card";
@@ -25,7 +27,6 @@ import {
   Target,
   BarChart3,
   Calendar,
-  Loader2,
 } from "lucide-react";
 import { SymbolCell } from "@/components/dashboard/symbol-icon";
 import { PageContainer, AnimatedSection } from "@/components/motion";
@@ -322,7 +323,7 @@ function HistoryTableLoading() {
     >
       <div className="flex items-center gap-3 border-b border-border-subtle bg-bg-tertiary/20 px-6 py-4">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-accent/20 bg-accent/10 text-accent shadow-[0_0_24px_rgba(96,165,250,0.12)]">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          <IOSSpinner size={16} />
         </span>
         <div>
           <p className="text-sm font-medium text-text-primary">
@@ -366,13 +367,13 @@ function HistoryTableLoading() {
                       cellIndex >= 2 && cellIndex <= 5 && "text-right"
                     )}
                   >
-                    <span
+                    <Skeleton
                       className={cn(
-                        "inline-block h-3 animate-pulse rounded-full bg-bg-tertiary",
+                        "h-3 rounded-full",
                         width,
                         cellIndex >= 2 && cellIndex <= 5 && "ml-auto"
                       )}
-                      style={{ animationDelay: `${rowIndex * 90 + cellIndex * 35}ms` }}
+                      delayMs={rowIndex * 90 + cellIndex * 35}
                     />
                   </td>
                 ))}

@@ -19,6 +19,35 @@ def test_list_broker_servers_includes_seed_catalog(monkeypatch, tmp_path):
     assert amarkets["source"] == "seed"
 
 
+def test_paginate_broker_servers_keeps_brand_servers_together(monkeypatch, tmp_path):
+    _isolate_catalog(monkeypatch, tmp_path)
+    brokers = broker_catalog.list_broker_servers()
+
+    first_page, total = broker_catalog.paginate_broker_servers(
+        brokers,
+        page=1,
+        page_size=1,
+    )
+
+    assert total == 24
+    assert [item["value"] for item in first_page] == ["AMarkets-Real", "AMarkets-Demo"]
+
+
+def test_paginate_broker_servers_searches_the_full_catalog(monkeypatch, tmp_path):
+    _isolate_catalog(monkeypatch, tmp_path)
+    brokers = broker_catalog.list_broker_servers()
+
+    results, total = broker_catalog.paginate_broker_servers(
+        brokers,
+        page=1,
+        page_size=8,
+        query="Axiory-Demo",
+    )
+
+    assert total == 1
+    assert [item["value"] for item in results] == ["Axiory-Live", "Axiory-Demo"]
+
+
 def test_record_broker_server_persists_successful_unknown_server(monkeypatch, tmp_path):
     catalog_path = _isolate_catalog(monkeypatch, tmp_path)
 

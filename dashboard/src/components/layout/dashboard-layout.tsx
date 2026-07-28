@@ -29,8 +29,9 @@ import {
   type ReactNode,
 } from "react";
 import type { Position, AccountInfo } from "@/types";
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
 import { SquareSnake } from "@/components/amicro/square-snake";
-import { Bell, Search, ChevronDown, Loader2, LogOut, Plus, UserRound } from "lucide-react";
+import { Bell, Search, ChevronDown, LogOut, Plus, UserRound } from "lucide-react";
 
 interface PriceData {
   symbol: string;
@@ -632,7 +633,7 @@ function AuthenticatedDashboardLayout({
         <div className="min-w-0 flex-1 flex flex-col min-h-screen">
           <header className="h-14 border-b border-border-subtle bg-bg-primary/70 backdrop-blur-xl sticky top-0 z-40">
             <div className="h-full px-4 lg:px-6 flex items-center justify-between gap-4">
-              <div className="min-w-0">
+              <div className="min-w-0 sm:w-28 sm:shrink-0">
                 <p className="text-sm font-medium text-text-primary truncate">
                   {visibleActiveAccount?.name || (needsSetup ? "Account Setup" : "Portfolio")}
                 </p>
@@ -648,7 +649,7 @@ function AuthenticatedDashboardLayout({
               <CommandSearchTrigger onOpen={() => setCommandOpen(true)} />
 
               <div className="flex items-center gap-4">
-                <div className="hidden lg:flex items-center gap-3">
+                <div className="hidden min-[1400px]:flex items-center gap-3">
                   {!needsSetup && HEADER_SYMBOLS.map((sym) => {
                     const price = headerPrices[sym.base];
 
@@ -842,7 +843,7 @@ function AuthenticatedDashboardLayout({
                     variant="accent"
                     disabled={isCreatingAccount || !newAccountName.trim()}
                   >
-                    {isCreatingAccount && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {isCreatingAccount && <IOSSpinner size={16} />}
                     <span>Create</span>
                   </Button>
                 </div>

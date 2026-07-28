@@ -11,6 +11,33 @@ from .runtime_data import DATA_DIR
 
 BROKER_CATALOG_PATH = DATA_DIR / "broker_servers.json"
 
+BROKER_BRAND_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("AMarkets", ("AMarkets-",)),
+    ("Admirals", ("AdmiralMarkets-",)),
+    ("Exness", ("Exness-",)),
+    ("IC Markets", ("ICMarketsSC-",)),
+    ("Pepperstone", ("Pepperstone-",)),
+    ("OANDA", ("OANDA-",)),
+    ("Eightcap", ("Eightcap-",)),
+    ("FP Markets", ("FPMarkets-",)),
+    ("Axiory", ("Axiory-",)),
+    ("BlackBull Markets", ("BlackBullMarkets-",)),
+    ("Blueberry Markets", ("BlueberryMarkets-",)),
+    ("FBS", ("FBS-",)),
+    ("Fusion Markets", ("FusionMarkets-",)),
+    ("FxPro", ("FxPro",)),
+    ("HFM", ("HFM-",)),
+    ("IronFX", ("IronFX-",)),
+    ("JustMarkets", ("JustMarkets-",)),
+    ("LiteFinance", ("LiteFinance-",)),
+    ("MetaQuotes", ("MetaQuotes-",)),
+    ("Octa", ("OctaFX-",)),
+    ("RoboForex", ("RoboForex-",)),
+    ("Tickmill", ("Tickmill-",)),
+    ("Vantage", ("VantageInternational-",)),
+    ("XM", ("XMGlobal-",)),
+)
+
 SEED_MT5_BROKER_SERVERS: list[dict[str, str]] = [
     {"value": "AMarkets-Real", "label": "AMarkets - Real (AMarkets-Real)"},
     {"value": "AMarkets-Demo", "label": "AMarkets - Demo (AMarkets-Demo)"},
@@ -121,6 +148,42 @@ def list_broker_servers() -> list[dict[str, str]]:
             seen.add(value)
         options.extend(sorted(learned, key=lambda item: item["label"].lower()))
     return options
+
+
+def paginate_broker_servers(
+    options: list[dict[str, str]],
+    *,
+    page: int,
+    page_size: int,
+    query: str = "",
+) -> tuple[list[dict[str, str]], int]:
+    """Return one page of server options, grouped and counted by broker brand."""
+    normalized_query = query.strip().casefold()
+    groups: list[list[dict[str, str]]] = []
+
+    for brand_name, prefixes in BROKER_BRAND_PREFIXES:
+        servers = [
+            option
+            for option in options
+            if any(option["value"].startswith(prefix) for prefix in prefixes)
+        ]
+        if not servers:
+            continue
+        if normalized_query and not (
+            normalized_query in brand_name.casefold()
+            or any(
+                normalized_query in option["label"].casefold()
+                or normalized_query in option["value"].casefold()
+                for option in servers
+            )
+        ):
+            continue
+        groups.append(servers)
+
+    total = len(groups)
+    start = (page - 1) * page_size
+    selected_groups = groups[start : start + page_size]
+    return [option for group in selected_groups for option in group], total
 
 
 def record_broker_server(server: str | None, company: str | None = None) -> None:

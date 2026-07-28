@@ -10,7 +10,6 @@ import {
   Check,
   CheckCircle2,
   Info,
-  Loader2,
   LockKeyhole,
   Search,
   Server,
@@ -18,6 +17,7 @@ import {
   ShieldCheck,
   WalletCards,
 } from "lucide-react";
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
 import { PageLoading } from "@/components/layout";
 import { useDashboard } from "@/components/layout/dashboard-layout";
 import { AnimatedSection, PageContainer } from "@/components/motion";
@@ -59,6 +59,10 @@ const SETUP_STEPS = [
   { title: "Test connection", description: "Verify account access" },
 ] as const;
 
+const BROKER_PAGE_SIZE = 8;
+const ALL_SEEDED_BROKER_GROUPS = groupBrokerServers(MT5_BROKER_SERVER_OPTIONS);
+const INITIAL_BROKER_GROUPS = ALL_SEEDED_BROKER_GROUPS.slice(0, BROKER_PAGE_SIZE);
+
 type SetupConfig = typeof EMPTY_CONFIG;
 type AccountKind = "live" | "demo";
 type VerifiedConnection = {
@@ -70,6 +74,51 @@ type VerifiedConnection = {
 function maskMt5Login(login: string) {
   const visible = login.trim().slice(-4);
   return visible ? `••••${visible}` : "••••";
+}
+
+function seededBrokerGroupForServer(server: string): BrokerBrandGroup | undefined {
+  const brand = brokerBrandForServer(server);
+  if (!brand) return undefined;
+  const seededGroup = ALL_SEEDED_BROKER_GROUPS.find((group) => group.id === brand.id);
+  if (!server || seededGroup?.servers.some((option) => option.value === server)) {
+    return seededGroup;
+  }
+  return {
+    ...(seededGroup ?? brand),
+    servers: [
+      ...(seededGroup?.servers ?? []),
+      { value: server, label: server, source: "current" },
+    ],
+  };
+}
+
+function paginateBrokerGroups(
+  groups: BrokerBrandGroup[],
+  page: number,
+  query: string
+) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredGroups = normalizedQuery
+    ? groups.filter(
+        (brand) =>
+          brand.name.toLowerCase().includes(normalizedQuery) ||
+          brand.servers.some(
+            (server) =>
+              server.label.toLowerCase().includes(normalizedQuery) ||
+              server.value.toLowerCase().includes(normalizedQuery)
+        )
+      )
+    : groups;
+  const start = (page - 1) * BROKER_PAGE_SIZE;
+  return {
+    groups: filteredGroups.slice(start, start + BROKER_PAGE_SIZE),
+    total: filteredGroups.length,
+    totalPages: Math.ceil(filteredGroups.length / BROKER_PAGE_SIZE),
+  };
+}
+
+function localBrokerPage(page: number, query: string) {
+  return paginateBrokerGroups(ALL_SEEDED_BROKER_GROUPS, page, query);
 }
 
 export function AccountSetupContent({ editMode = false }: { editMode?: boolean }) {
@@ -84,10 +133,18 @@ export function AccountSetupContent({ editMode = false }: { editMode?: boolean }
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [brokerServers, setBrokerServers] = useState<BrokerServerOption[]>(
-    MT5_BROKER_SERVER_OPTIONS
+    INITIAL_BROKER_GROUPS.flatMap((brand) => brand.servers)
   );
   const [brokerQuery, setBrokerQuery] = useState("");
-  const [selectedBrandId, setSelectedBrandId] = useState<string | null>(null);
+  const [debouncedBrokerQuery, setDebouncedBrokerQuery] = useState("");
+  const [brokerPage, setBrokerPage] = useState(1);
+  const [brokerTotal, setBrokerTotal] = useState(ALL_SEEDED_BROKER_GROUPS.length);
+  const [brokerTotalPages, setBrokerTotalPages] = useState(
+    Math.ceil(ALL_SEEDED_BROKER_GROUPS.length / BROKER_PAGE_SIZE)
+  );
+  const [isBrokerLoading, setIsBrokerLoading] = useState(false);
+  const [brokerLoadError, setBrokerLoadError] = useState<string | null>(null);
+  const [selectedBrand, setSelectedBrand] = useState<BrokerBrandGroup>();
   const [accountKind, setAccountKind] = useState<AccountKind>("live");
   const [useCustomBrokerServer, setUseCustomBrokerServer] = useState(false);
   const [verifiedConnection, setVerifiedConnection] = useState<VerifiedConnection | null>(null);
@@ -100,27 +157,6 @@ export function AccountSetupContent({ editMode = false }: { editMode?: boolean }
     [session.accounts, session.activeAccountId]
   );
   const brokerGroups = useMemo(() => groupBrokerServers(brokerServers), [brokerServers]);
-  const selectedBrand = useMemo(
-    () => brokerGroups.find((brand) => brand.id === selectedBrandId),
-    [brokerGroups, selectedBrandId]
-  );
-  const filteredBrokerGroups = useMemo(() => {
-    const query = brokerQuery.trim().toLowerCase();
-    if (!query) return brokerGroups;
-    return brokerGroups.filter(
-      (brand) =>
-        brand.name.toLowerCase().includes(query) ||
-        brand.servers.some(
-          (server) =>
-            server.label.toLowerCase().includes(query) ||
-            server.value.toLowerCase().includes(query)
-        )
-    );
-  }, [brokerGroups, brokerQuery]);
-  const visibleBrokerGroups = useMemo(
-    () => (brokerQuery.trim() ? filteredBrokerGroups : filteredBrokerGroups.slice(0, 8)),
-    [brokerQuery, filteredBrokerGroups]
-  );
   const matchingServers = useMemo(
     () =>
       selectedBrand?.servers.filter(
@@ -141,7 +177,7 @@ export function AccountSetupContent({ editMode = false }: { editMode?: boolean }
     if (designPreview) {
       setConfig({ MT5_LOGIN: "3370267", MT5_PASSWORD: "", MT5_SERVER: "AMarkets-Real" });
       setConfiguredSecrets(["MT5_PASSWORD"]);
-      setSelectedBrandId("amarkets");
+      setSelectedBrand(seededBrokerGroupForServer("AMarkets-Real"));
       setAccountKind("live");
       setIsLoading(false);
       return;
@@ -167,7 +203,9 @@ export function AccountSetupContent({ editMode = false }: { editMode?: boolean }
         setConfig(nextConfig);
         setConfiguredSecrets(result.configuredSecrets || []);
         setAccountKind(brokerServerKind(nextConfig.MT5_SERVER));
-        setSelectedBrandId(currentBrand?.id ?? null);
+        setSelectedBrand(
+          currentBrand ? seededBrokerGroupForServer(nextConfig.MT5_SERVER) : undefined
+        );
         setUseCustomBrokerServer(Boolean(nextConfig.MT5_SERVER && !currentBrand));
       } catch (err) {
         if (!cancelled) {
@@ -185,19 +223,69 @@ export function AccountSetupContent({ editMode = false }: { editMode?: boolean }
   }, [designPreview, session.activeAccountId]);
 
   useEffect(() => {
-    if (designPreview) return;
+    const timeout = window.setTimeout(() => {
+      setDebouncedBrokerQuery(brokerQuery.trim());
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [brokerQuery]);
+
+  useEffect(() => {
+    if (designPreview) {
+      const result = localBrokerPage(brokerPage, debouncedBrokerQuery);
+      setBrokerServers(result.groups.flatMap((brand) => brand.servers));
+      setBrokerTotal(result.total);
+      setBrokerTotalPages(result.totalPages);
+      setBrokerLoadError(null);
+      return;
+    }
+
     let cancelled = false;
-    getMT5BrokerServers()
+    setIsBrokerLoading(true);
+    setBrokerLoadError(null);
+    getMT5BrokerServers({
+      page: brokerPage,
+      pageSize: BROKER_PAGE_SIZE,
+      query: debouncedBrokerQuery,
+    })
       .then((result) => {
-        if (!cancelled && result.success && result.brokers.length > 0) {
-          setBrokerServers(result.brokers);
+        if (cancelled || !result.success) return;
+        const hasPaginationMetadata =
+          Number.isInteger(result.total) && Number.isInteger(result.total_pages);
+        const fallbackPage = hasPaginationMetadata
+          ? null
+          : paginateBrokerGroups(
+              groupBrokerServers(result.brokers),
+              brokerPage,
+              debouncedBrokerQuery
+            );
+        const nextGroups = fallbackPage?.groups ?? groupBrokerServers(result.brokers);
+        setBrokerServers(
+          fallbackPage
+            ? fallbackPage.groups.flatMap((brand) => brand.servers)
+            : result.brokers
+        );
+        setBrokerTotal(fallbackPage?.total ?? result.total);
+        setBrokerTotalPages(fallbackPage?.totalPages ?? result.total_pages);
+        setSelectedBrand((previous) =>
+          previous
+            ? nextGroups.find((brand) => brand.id === previous.id) ?? previous
+            : previous
+        );
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setBrokerLoadError(
+            loadError instanceof Error ? loadError.message : "Could not load brokers"
+          );
         }
       })
-      .catch(() => undefined);
+      .finally(() => {
+        if (!cancelled) setIsBrokerLoading(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, [designPreview]);
+  }, [brokerPage, debouncedBrokerQuery, designPreview]);
 
   const updateField = (key: keyof SetupConfig, value: string) => {
     setConfig((previous) => ({ ...previous, [key]: value }));
@@ -206,7 +294,7 @@ export function AccountSetupContent({ editMode = false }: { editMode?: boolean }
   };
 
   const chooseBroker = (brand: BrokerBrandGroup) => {
-    setSelectedBrandId(brand.id);
+    setSelectedBrand(brand);
     setUseCustomBrokerServer(false);
     const existingBelongsToBrand = brand.servers.some(
       (server) => server.value === config.MT5_SERVER
@@ -215,10 +303,15 @@ export function AccountSetupContent({ editMode = false }: { editMode?: boolean }
   };
 
   const chooseManualBroker = () => {
-    setSelectedBrandId(null);
+    setSelectedBrand(undefined);
     setUseCustomBrokerServer(true);
     updateField("MT5_SERVER", "");
     setStep(2);
+  };
+
+  const updateBrokerSearch = (value: string) => {
+    setBrokerQuery(value);
+    setBrokerPage(1);
   };
 
   const chooseAccountKind = (kind: AccountKind) => {
@@ -372,9 +465,15 @@ export function AccountSetupContent({ editMode = false }: { editMode?: boolean }
           {step === 1 && (
             <BrokerStep
               brokerQuery={brokerQuery}
-              filteredBrokerGroups={visibleBrokerGroups}
+              brokerGroups={brokerGroups}
+              brokerPage={brokerPage}
+              brokerTotal={brokerTotal}
+              brokerTotalPages={brokerTotalPages}
+              isBrokerLoading={isBrokerLoading}
+              brokerLoadError={brokerLoadError}
               selectedBrand={selectedBrand}
-              setBrokerQuery={setBrokerQuery}
+              setBrokerQuery={updateBrokerSearch}
+              setBrokerPage={setBrokerPage}
               chooseBroker={chooseBroker}
               chooseManualBroker={chooseManualBroker}
             />
@@ -611,19 +710,34 @@ function SetupProgress({
 
 function BrokerStep({
   brokerQuery,
-  filteredBrokerGroups,
+  brokerGroups,
+  brokerPage,
+  brokerTotal,
+  brokerTotalPages,
+  isBrokerLoading,
+  brokerLoadError,
   selectedBrand,
   setBrokerQuery,
+  setBrokerPage,
   chooseBroker,
   chooseManualBroker,
 }: {
   brokerQuery: string;
-  filteredBrokerGroups: BrokerBrandGroup[];
+  brokerGroups: BrokerBrandGroup[];
+  brokerPage: number;
+  brokerTotal: number;
+  brokerTotalPages: number;
+  isBrokerLoading: boolean;
+  brokerLoadError: string | null;
   selectedBrand?: BrokerBrandGroup;
   setBrokerQuery: (value: string) => void;
+  setBrokerPage: (page: number) => void;
   chooseBroker: (brand: BrokerBrandGroup) => void;
   chooseManualBroker: () => void;
 }) {
+  const firstBrokerNumber = brokerTotal === 0 ? 0 : (brokerPage - 1) * BROKER_PAGE_SIZE + 1;
+  const lastBrokerNumber = Math.min(brokerPage * BROKER_PAGE_SIZE, brokerTotal);
+
   return (
     <section aria-labelledby="choose-broker-title" className="space-y-6">
       <div>
@@ -652,9 +766,15 @@ function BrokerStep({
         />
       </div>
 
-      {filteredBrokerGroups.length > 0 ? (
-        <div className="grid h-[310px] grid-cols-2 auto-rows-[132px] content-start gap-3 overflow-y-auto pr-1 sm:auto-rows-[120px] sm:gap-4 lg:grid-cols-4">
-          {filteredBrokerGroups.map((brand) => {
+      {brokerGroups.length > 0 ? (
+        <div
+          className={cn(
+            "grid h-[310px] grid-cols-2 auto-rows-[132px] content-start gap-3 overflow-y-auto pr-1 transition-opacity sm:auto-rows-[120px] sm:gap-4 lg:grid-cols-4",
+            isBrokerLoading && "pointer-events-none opacity-50"
+          )}
+          aria-busy={isBrokerLoading}
+        >
+          {brokerGroups.map((brand) => {
             const selected = selectedBrand?.id === brand.id;
             return (
               <button
@@ -684,10 +804,61 @@ function BrokerStep({
         </div>
       ) : (
         <div className="rounded-xl border border-border-subtle px-5 py-8 text-center">
-          <p className="text-base font-medium text-text-primary">No broker found</p>
-          <p className="mt-1 text-sm text-text-secondary">Try another spelling or enter the server manually.</p>
+          {isBrokerLoading ? (
+            <div className="flex items-center justify-center gap-2 text-sm text-text-secondary">
+              <IOSSpinner size={16} />
+              Loading brokers…
+            </div>
+          ) : (
+            <>
+              <p className="text-base font-medium text-text-primary">No broker found</p>
+              <p className="mt-1 text-sm text-text-secondary">Try another spelling or enter the server manually.</p>
+            </>
+          )}
         </div>
       )}
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm text-text-secondary" aria-live="polite">
+            {brokerTotal > 0
+              ? `${firstBrokerNumber}–${lastBrokerNumber} of ${brokerTotal} brokers`
+              : "0 brokers"}
+          </p>
+          {brokerLoadError && (
+            <p className="mt-1 text-xs text-danger">Could not refresh the broker directory.</p>
+          )}
+        </div>
+        {brokerTotalPages > 1 && (
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setBrokerPage(brokerPage - 1)}
+              disabled={brokerPage <= 1 || isBrokerLoading}
+              aria-label="Previous broker page"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Previous
+            </Button>
+            <span className="min-w-20 text-center text-xs text-text-muted">
+              Page {brokerPage} of {brokerTotalPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setBrokerPage(brokerPage + 1)}
+              disabled={brokerPage >= brokerTotalPages || isBrokerLoading}
+              aria-label="Next broker page"
+            >
+              Next
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+      </div>
 
       <div className="grid gap-5 border-y border-border-subtle py-5 md:grid-cols-2 md:divide-x md:divide-border-subtle">
         <button type="button" onClick={chooseManualBroker} className="flex items-center gap-4 text-left">
@@ -1032,7 +1203,7 @@ function SetupFooter({
         disabled={isSubmitting || (step === 1 && !canContinue)}
         className="w-full bg-accent-dark text-white hover:bg-accent sm:w-auto"
       >
-        {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+        {isSubmitting && <IOSSpinner size={16} />}
         {!isSubmitting && step === 4 && <Check className="h-4 w-4" />}
         {isSubmitting
           ? "Testing connection"

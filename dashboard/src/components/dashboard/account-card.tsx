@@ -1,5 +1,6 @@
 "use client";
 
+import { Skeleton } from "@/components/amicro/skeleton";
 import { GlassCard } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 import type { AccountInfo } from "@/types";
@@ -18,11 +19,11 @@ interface AccountCardProps {
 export function AccountCard({ account }: AccountCardProps) {
   if (!account) {
     return (
-      <GlassCard className="animate-pulse">
+      <GlassCard>
         <div className="space-y-3">
-          <div className="w-20 h-3 rounded bg-bg-tertiary" />
-          <div className="w-36 h-8 rounded bg-bg-tertiary" />
-          <div className="w-full h-4 rounded bg-bg-tertiary" />
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-8 w-36" delayMs={120} />
+          <Skeleton className="h-4 w-full" delayMs={240} />
         </div>
       </GlassCard>
     );

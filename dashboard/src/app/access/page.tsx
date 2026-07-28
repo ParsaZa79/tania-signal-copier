@@ -9,6 +9,7 @@ import {
   updateAccessMember,
   type AccessMember,
 } from "@/lib/api";
+import { IOSSpinner } from "@/components/amicro/ios-spinner";
 import { useDashboard } from "@/components/layout/dashboard-layout";
 import {
   PageHeader,
@@ -309,7 +310,7 @@ function StatusBadge({ status }: { status: AccessMember["status"] }) {
 function LoaderLabel({ label }: { label: string }) {
   return (
     <>
-      <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-bg-primary/30 border-t-bg-primary" />
+      <IOSSpinner size={14} />
       {label}
     </>
   );

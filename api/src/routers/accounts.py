@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -14,6 +15,7 @@ from ..account_store import (
     mark_account_setup_complete,
     set_user_active_account,
 )
+from ..dependencies import activate_account_runtime
 from ..security import get_current_user
 
 router = APIRouter()
@@ -86,9 +88,16 @@ async def set_active_account(
         account = set_user_active_account(current_user["id"], account_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    runtime_result = await asyncio.to_thread(activate_account_runtime, account["id"])
     return {
         "success": True,
         "account": account,
         "active_account_id": account["id"],
         "accounts": list_user_accounts(current_user["id"]),
+        "runtime": {
+            "success": bool(runtime_result.get("success")),
+            "connected": bool(runtime_result.get("connected")),
+            "error": runtime_result.get("error"),
+        },
     }

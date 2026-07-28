@@ -151,6 +151,21 @@ body {
   animation: square-snake 1.5s ease-in-out infinite backwards;
 }
 
+/* Amicro skeleton shimmer. CSS-driven for the same pre-hydration reason. */
+@keyframes skeleton-shimmer {
+  from {
+    transform: translateX(-150%);
+  }
+  to {
+    transform: translateX(150%);
+  }
+}
+
+.animate-skeleton-shimmer {
+  /* backwards fill keeps staggered sweeps off-screen during their delay */
+  animation: skeleton-shimmer 1.6s ease-in-out infinite backwards;
+}
+
 /* Gradient mesh background */
 .bg-mesh {
   background:
