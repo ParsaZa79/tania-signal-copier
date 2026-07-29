@@ -139,11 +139,18 @@ async def start_broadcaster(
                 continue
 
             for account_id in manager.account_ids:
-                executor = get_executor(account_id)
-                if is_runtime_owner is not None and not is_runtime_owner(account_id, executor):
+                try:
+                    executor = get_executor(account_id)
+                    if is_runtime_owner is not None and not is_runtime_owner(
+                        account_id, executor
+                    ):
+                        message = snapshots.runtime_unavailable(account_id)
+                    else:
+                        message = await snapshots.build_update(executor, account_id)
+                except Exception:
+                    # Endpoint capacity or one unhealthy terminal must never
+                    # prevent healthy accounts from receiving their updates.
                     message = snapshots.runtime_unavailable(account_id)
-                else:
-                    message = await snapshots.build_update(executor, account_id)
                 await manager.broadcast(account_id, message)
 
         except asyncio.CancelledError:

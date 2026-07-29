@@ -49,6 +49,9 @@ The public API never receives Docker access or raw MT5 credentials. Live orders 
 
 - PostgreSQL reachable through `DATABASE_URL`; the API image runs Alembic before startup.
 - A persistent `/app/data` mount for encrypted account configuration, legacy archive input, and compatibility history.
+- An ordered `MT5_RUNTIME_ENDPOINTS` pool of private RPyC endpoints. The API persists a
+  unique endpoint assignment for every configured account and fails closed when the
+  pool is full; it never moves another account or shuts down another terminal.
 - `PAPER_LIVE_ENABLED=false` until the runtime manager and an approved jurisdiction policy are both present.
 - Public liveness at `/api/health/` and deployment readiness at `/api/health/ready`.
 

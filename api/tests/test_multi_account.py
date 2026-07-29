@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.datastructures import Headers
 
-from src import access_store, account_store, dependencies, runtime_data, security
+from src import access_store, account_store, dependencies, runtime_data, runtime_pool, security
 from src.routers import access as access_router
 from src.routers import accounts as accounts_router
 
@@ -368,7 +368,7 @@ class _RuntimeExecutor:
         return {"success": True, "connected": True, "health": self.health_check()}
 
 
-def test_mt5_executor_requires_account_to_own_runtime(monkeypatch):
+def test_connected_mt5_executors_are_available_at_the_same_time(monkeypatch):
     primary = _RuntimeExecutor()
     secondary = _RuntimeExecutor()
     monkeypatch.setattr(
@@ -376,20 +376,59 @@ def test_mt5_executor_requires_account_to_own_runtime(monkeypatch):
         "_mt5_executors",
         {"primary": primary, "secondary": secondary},
     )
-    monkeypatch.setattr(dependencies, "_active_runtime_account_id", "primary")
 
     assert dependencies.get_mt5_executor({"id": "primary"}) is primary
+    assert dependencies.get_mt5_executor({"id": "secondary"}) is secondary
     assert dependencies.is_account_runtime_active("primary", primary) is True
-    assert dependencies.is_account_runtime_active("secondary", secondary) is False
-
-    with pytest.raises(HTTPException) as exc_info:
-        dependencies.get_mt5_executor({"id": "secondary"})
-
-    assert exc_info.value.status_code == 503
-    assert secondary.disconnect_called is True
+    assert dependencies.is_account_runtime_active("secondary", secondary) is True
+    assert dependencies.active_runtime_account_id() is None
+    assert primary.disconnect_called is False
+    assert secondary.disconnect_called is False
 
 
-def test_activate_account_runtime_reconnects_saved_account_after_demo_takes_over(monkeypatch):
+def test_executor_factory_receives_a_unique_persisted_endpoint_per_account(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MT5_RUNTIME_ENDPOINTS", "mt5:8001,mt5-2:8001")
+    monkeypatch.setattr(
+        runtime_pool,
+        "ASSIGNMENTS_PATH",
+        tmp_path / "mt5_runtime_assignments.json",
+    )
+    monkeypatch.setattr(
+        runtime_pool,
+        "ASSIGNMENTS_LOCK_PATH",
+        tmp_path / ".mt5_runtime_assignments.lock",
+    )
+    monkeypatch.setattr(dependencies, "_mt5_executors", {})
+    monkeypatch.setattr(
+        dependencies,
+        "load_account_config",
+        lambda account_id, reveal_secrets: {
+            "MT5_LOGIN": "111111",
+            "MT5_PASSWORD": "saved-password",
+            "MT5_SERVER": "Broker-Real",
+        },
+    )
+    factory_calls: list[dict] = []
+
+    def factory(**config):
+        factory_calls.append(config)
+        return _RuntimeExecutor(connected=False)
+
+    monkeypatch.setattr(dependencies, "_executor_factory", factory)
+
+    dependencies.get_executor_for_account_id("live")
+    dependencies.get_executor_for_account_id("demo")
+
+    assert [
+        (call["docker_host"], call["docker_port"])
+        for call in factory_calls
+    ] == [("mt5", 8001), ("mt5-2", 8001)]
+
+
+def test_activate_account_runtime_does_not_disconnect_another_account(monkeypatch):
     live = _RuntimeExecutor(connected=False)
     demo = _RuntimeExecutor(connected=True)
     monkeypatch.setattr(
@@ -397,7 +436,6 @@ def test_activate_account_runtime_reconnects_saved_account_after_demo_takes_over
         "_mt5_executors",
         {"live": live, "demo": demo},
     )
-    monkeypatch.setattr(dependencies, "_active_runtime_account_id", "demo")
     monkeypatch.setattr(
         dependencies,
         "load_account_config",
@@ -411,10 +449,11 @@ def test_activate_account_runtime_reconnects_saved_account_after_demo_takes_over
     result = dependencies.activate_account_runtime("live")
 
     assert result["connected"] is True
-    assert dependencies.active_runtime_account_id() == "live"
+    assert dependencies.active_runtime_account_id() is None
     assert live.reconfigure_calls[0]["login"] == 111111
     assert live.reconfigure_calls[0]["server"] == "Broker-Live"
-    assert demo.disconnect_called is True
+    assert demo.connected is True
+    assert demo.disconnect_called is False
 
 
 def test_activate_unconfigured_account_does_not_disconnect_existing_runtime(monkeypatch):
@@ -425,7 +464,6 @@ def test_activate_unconfigured_account_does_not_disconnect_existing_runtime(monk
         "_mt5_executors",
         {"live": live, "new-demo": unconfigured},
     )
-    monkeypatch.setattr(dependencies, "_active_runtime_account_id", "live")
     monkeypatch.setattr(
         dependencies,
         "load_account_config",
@@ -465,8 +503,12 @@ def test_restore_account_executor_reconnects_saved_runtime_without_displacing_an
     monkeypatch,
 ):
     executor = _RuntimeExecutor(connected=False)
-    monkeypatch.setattr(dependencies, "_mt5_executors", {"primary": executor})
-    monkeypatch.setattr(dependencies, "_active_runtime_account_id", None)
+    other = _RuntimeExecutor(connected=True)
+    monkeypatch.setattr(
+        dependencies,
+        "_mt5_executors",
+        {"primary": executor, "other": other},
+    )
     monkeypatch.setattr(
         dependencies,
         "load_account_config",
@@ -488,8 +530,5 @@ def test_restore_account_executor_reconnects_saved_runtime_without_displacing_an
 
     assert result["connected"] is True
     assert calls == [("primary", "Broker-Real")]
-
-    monkeypatch.setattr(dependencies, "_active_runtime_account_id", "other")
-    refused = dependencies.restore_account_executor("primary")
-    assert refused["connected"] is False
-    assert calls == [("primary", "Broker-Real")]
+    assert other.connected is True
+    assert other.disconnect_called is False

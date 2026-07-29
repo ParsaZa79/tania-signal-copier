@@ -1,4 +1,33 @@
 services:
+  mt5-runtime-init:
+    image: trading-platform/mt5-rpyc:6.0.2
+    restart: "no"
+    network_mode: none
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        for runtime in /runtime-2 /runtime-3; do
+          target="$$runtime/.wine/drive_c/mt5-autotrading.ini"
+          mkdir -p "$$(dirname "$$target")"
+          if [ ! -s "$$target" ]; then
+            printf '%s\n' \
+              '[Experts]' \
+              'AllowLiveTrading=1' \
+              'Enabled=1' \
+              'Account=0' \
+              'Profile=0' \
+              'Chart=0' \
+              'Api=0' > "$$target"
+            chmod 600 "$$target"
+          fi
+          chown -R 911:911 "$$runtime"
+        done
+    volumes:
+      - mt5-config-2:/runtime-2
+      - mt5-config-3:/runtime-3
+
   mt5:
     image: trading-platform/mt5-rpyc:6.0.2
     restart: unless-stopped
@@ -16,10 +45,74 @@ services:
       - trading-mt5-api
       - trading-mt5-egress
 
+  mt5-2:
+    image: trading-platform/mt5-rpyc:6.0.2
+    restart: unless-stopped
+    depends_on:
+      mt5-runtime-init:
+        condition: service_completed_successfully
+    environment:
+      CUSTOM_USER: ${MT5_VNC_USER:-parsa}
+      PASSWORD: ${MT5_VNC_PASSWORD:?set MT5_VNC_PASSWORD}
+      MT5_CMD_OPTIONS: '/config:C:\mt5-autotrading.ini'
+    expose:
+      - "8001"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import rpyc;
+          connection=rpyc.classic.connect('127.0.0.1', 8001);
+          assert connection.eval('6 * 7') == 42;
+          connection.close()"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
+    volumes:
+      - mt5-config-2:/config
+    networks:
+      - trading-mt5-api
+      - trading-mt5-egress
+
+  mt5-3:
+    image: trading-platform/mt5-rpyc:6.0.2
+    restart: unless-stopped
+    depends_on:
+      mt5-runtime-init:
+        condition: service_completed_successfully
+    environment:
+      CUSTOM_USER: ${MT5_VNC_USER:-parsa}
+      PASSWORD: ${MT5_VNC_PASSWORD:?set MT5_VNC_PASSWORD}
+      MT5_CMD_OPTIONS: '/config:C:\mt5-autotrading.ini'
+    expose:
+      - "8001"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import rpyc;
+          connection=rpyc.classic.connect('127.0.0.1', 8001);
+          assert connection.eval('6 * 7') == 42;
+          connection.close()"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
+    volumes:
+      - mt5-config-3:/config
+    networks:
+      - trading-mt5-api
+      - trading-mt5-egress
+
 volumes:
   mt5-config:
     name: trading-mt5-config
     external: true
+  mt5-config-2:
+    name: trading-mt5-config-2
+  mt5-config-3:
+    name: trading-mt5-config-3
 
 networks:
   trading-mt5-api:

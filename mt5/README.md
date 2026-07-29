@@ -29,8 +29,8 @@ The smoke performs only `import`, version evaluation, and read-only
 
 ## Production
 
-Create and validate both dedicated networks and the persistent volume once on the
-Dokploy host, before either deployment:
+Create and validate both dedicated networks and the primary persistent volume once
+on the Dokploy host, before either deployment:
 
 ```bash
 sudo ./mt5/ensure-production-network.sh
@@ -40,12 +40,16 @@ sudo ./mt5/ensure-production-network.sh
 and MT5. `trading-mt5-egress` is a bridge used only by MT5 to reach broker
 endpoints; never attach application services to it. RPyC remains unpublished on
 the host. In Dokploy, attach exactly `trading-mt5-api` to the API application's
-**Advanced > Networks** and redeploy the API. Set its MT5 host/port to
-`mt5:8001`. Do not attach MT5 to `dokploy-network`, and do not attach the
-dashboard, database, or any other service to either MT5 network. Keep VNC
-loopback-bound and access it through an authenticated administrative tunnel.
+**Advanced > Networks** and redeploy the API. Set `MT5_RUNTIME_ENDPOINTS` to the
+ordered private pool, for example `mt5:8001,mt5-2:8001,mt5-3:8001`. The first
+runtime retains `trading-mt5-config`; additional explicitly named volumes are
+created by Compose and remain stable across redeploys. Each account is assigned
+one endpoint in `/app/data/mt5_runtime_assignments.json`. Do not attach MT5 to
+`dokploy-network`, and do not attach the dashboard, database, or any other
+service to either MT5 network. Keep VNC loopback-bound and access it through an
+authenticated administrative tunnel.
 
-The external networks and explicitly named volume `trading-mt5-config` survive
+The external networks and explicitly named runtime volumes survive
 Compose/Dokploy redeploys. Never use `docker compose down -v`. Before migration,
 preserve the exact prior deployment definition and data:
 
@@ -66,10 +70,10 @@ docker run --rm -v trading-mt5-config:/config:ro -v "$PWD":/backup alpine:3.22 \
 
 MT5 starts with `/config:C:\mt5-autotrading.ini`. The configuration enables
 automated trading and prevents account or profile changes from switching it
-back off. Production stores this file in the persistent MT5 volume at
-`/config/.wine/drive_c/mt5-autotrading.ini`; provision it from
-`mt5/autotrading.ini` before starting or recreating the service. The local
-Compose file mounts the tracked configuration directly.
+back off. Production stores this file in every persistent MT5 volume at
+`/config/.wine/drive_c/mt5-autotrading.ini`. The production Compose init job
+seeds new runtime volumes before their terminal starts; the local Compose file
+mounts the tracked configuration directly.
 
 Verify the setting without placing an order by reading `terminal_info()` through
 the private RPyC bridge. Both `trade_allowed` and `connected` must be true, while

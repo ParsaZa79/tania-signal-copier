@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
-from src.websocket.broadcaster import RuntimeSnapshotCache
+from src.websocket.broadcaster import RuntimeSnapshotCache, start_broadcaster
 
 
 def _account(balance: float = 10_000) -> SimpleNamespace:
@@ -89,3 +90,37 @@ async def test_repeated_snapshot_failures_recover_the_runtime_once() -> None:
     assert executor.recoveries == 1
     assert recovered["connection"]["status"] == "connected"
     assert recovered["account"]["balance"] == 10_050
+
+
+async def test_one_runtime_failure_does_not_block_other_account_updates() -> None:
+    delivered: dict[str, dict] = {}
+    healthy_delivered = asyncio.Event()
+    healthy_executor = _SequenceExecutor([([], _account(12_500))])
+
+    class _Manager:
+        connection_count = 2
+        account_ids = ["broken-account", "healthy-account"]
+
+        async def broadcast(self, account_id: str, message: dict) -> None:
+            delivered[account_id] = message
+            if account_id == "healthy-account":
+                healthy_delivered.set()
+
+    def get_executor(account_id: str):
+        if account_id == "broken-account":
+            raise RuntimeError("runtime unavailable")
+        return healthy_executor
+
+    task = asyncio.create_task(
+        start_broadcaster(get_executor, _Manager(), interval=0.01)  # type: ignore[arg-type]
+    )
+    await asyncio.wait_for(healthy_delivered.wait(), timeout=1)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert delivered["broken-account"]["connection"]["status"] == "disconnected"
+    assert delivered["healthy-account"]["connection"]["status"] == "connected"
+    assert delivered["healthy-account"]["account"]["balance"] == 12_500

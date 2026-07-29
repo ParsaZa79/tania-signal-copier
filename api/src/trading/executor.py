@@ -322,10 +322,11 @@ class MT5Executor:
         return True
 
     def disconnect(self) -> None:
-        """Shutdown MT5 connection."""
+        """Close this API client's connection to its isolated MT5 runtime."""
         with self._connection_lock:
             if self._mt5:
                 self._mt5.shutdown()
+                self._mt5 = None
             self.connected = False
 
     def is_alive(self) -> bool:

@@ -74,13 +74,14 @@ def test_effective_local_bindings_are_loopback_only_and_exact_image() -> None:
 
 def test_effective_production_network_is_dedicated_and_rpyc_is_not_published() -> None:
     config = _compose_config(MT5 / "compose.yaml")
-    service = config["services"]["mt5"]
+    for service_name in ("mt5", "mt5-2", "mt5-3"):
+        service = config["services"][service_name]
+        assert service["image"] == IMAGE
+        assert service["environment"]["MT5_CMD_OPTIONS"] == AUTOTRADING_OPTIONS
+        assert "build" not in service
+        assert set(service["networks"]) == {NETWORK, EGRESS_NETWORK}
+        assert all(port["target"] != 8001 for port in service.get("ports", []))
 
-    assert service["image"] == IMAGE
-    assert service["environment"]["MT5_CMD_OPTIONS"] == AUTOTRADING_OPTIONS
-    assert "build" not in service
-    assert set(service["networks"]) == {NETWORK, EGRESS_NETWORK}
-    assert all(port["target"] != 8001 for port in service.get("ports", []))
     assert config["networks"][NETWORK]["name"] == NETWORK
     assert config["networks"][NETWORK]["external"] is True
     assert config["networks"][EGRESS_NETWORK]["name"] == EGRESS_NETWORK
@@ -138,6 +139,48 @@ def test_compose_volume_identity_persists_across_recreate() -> None:
         assert mount["target"] == "/config"
         assert mount["source"] in config["volumes"]
         assert config["volumes"][mount["source"]]["name"] == expected
+
+
+def test_production_runtime_slots_have_unique_persistent_volumes() -> None:
+    config = _compose_config(MT5 / "compose.yaml")
+    mounts = {
+        service_name: config["services"][service_name]["volumes"][0]["source"]
+        for service_name in ("mt5", "mt5-2", "mt5-3")
+    }
+
+    assert len(set(mounts.values())) == len(mounts)
+    assert {
+        config["volumes"][volume_name]["name"]
+        for volume_name in mounts.values()
+    } == {
+        "trading-mt5-config",
+        "trading-mt5-config-2",
+        "trading-mt5-config-3",
+    }
+    for service_name in ("mt5-2", "mt5-3"):
+        healthcheck = config["services"][service_name]["healthcheck"]
+        health_command = " ".join(healthcheck["test"])
+        assert "rpyc.classic.connect('127.0.0.1', 8001)" in health_command
+        assert "connection.eval('6 * 7') == 42" in health_command
+
+
+def test_production_runtime_init_seeds_autotrading_for_new_slots() -> None:
+    config = _compose_config(MT5 / "compose.yaml")
+    init = config["services"]["mt5-runtime-init"]
+    command = " ".join(init["command"])
+
+    assert init["network_mode"] == "none"
+    assert "AllowLiveTrading=1" in command
+    assert "Account=0" in command
+    assert "Profile=0" in command
+    assert 'chown -R 911:911 "$$runtime"' in command
+    assert {
+        (mount["source"], mount["target"])
+        for mount in init["volumes"]
+    } == {
+        ("mt5-config-2", "/runtime-2"),
+        ("mt5-config-3", "/runtime-3"),
+    }
 
 
 def test_autotrading_startup_config_survives_account_and_profile_changes() -> None:

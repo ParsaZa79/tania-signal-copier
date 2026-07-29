@@ -642,11 +642,14 @@ class LinuxMT5Adapter(MT5AdapterBase):
             return False
 
     def shutdown(self) -> None:
-        """Shutdown MT5 connection."""
+        """Close this RPyC client without shutting down the terminal session.
+
+        The MetaTrader5 module belongs to the remote runtime, not to this API
+        client. Calling ``mt5.shutdown()`` here can tear down a newly established
+        connection from another RPyC client during an API reconnect.
+        """
         with self._request_lock:
             if self._conn:
-                with suppress(Exception):
-                    self._eval("mt5.shutdown()")
                 with suppress(Exception):
                     self._conn.close()
                 self._conn = None

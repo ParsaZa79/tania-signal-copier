@@ -37,6 +37,7 @@ from .routers import (
 from .routers import (
     config as config_router,
 )
+from .runtime_pool import validate_runtime_pool
 from .security import bootstrap_admin_from_env, current_user_for_websocket, get_current_user
 from .services.copy_legacy_migration import archive_legacy_copy_store
 from .services.copy_worker import run_copy_worker
@@ -70,6 +71,7 @@ async def lifespan(app: FastAPI):
             await archive_legacy_copy_store(session_factory)
             _copy_worker_task = asyncio.create_task(run_copy_worker(session_factory))
 
+    validate_runtime_pool()
     set_mt5_executor_factory(MT5Executor)
     bootstrap_admin_from_env()
 
