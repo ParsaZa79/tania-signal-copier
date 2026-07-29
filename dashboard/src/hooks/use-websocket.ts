@@ -18,6 +18,29 @@ interface UseWebSocketOptions {
   enabled: boolean;
   token: string;
   accountId: string | null;
+  getAccessToken?: () => Promise<string | undefined>;
+}
+
+const MAX_RECONNECT_DELAY_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = 20_000;
+const STALE_CONNECTION_MS = 45_000;
+
+export function webSocketReconnectDelay(attempt: number): number {
+  return Math.min(1000 * 2 ** Math.max(0, attempt), MAX_RECONNECT_DELAY_MS);
+}
+
+export function isWebSocketConnectionStale(
+  lastMessageAt: number,
+  now = Date.now()
+): boolean {
+  return lastMessageAt > 0 && now - lastMessageAt >= STALE_CONNECTION_MS;
+}
+
+export async function resolveWebSocketAccessToken(
+  fallbackToken: string,
+  getAccessToken?: () => Promise<string | undefined>
+): Promise<string | undefined> {
+  return getAccessToken ? getAccessToken() : fallbackToken;
 }
 
 export interface WebSocketFeedState {
@@ -58,9 +81,12 @@ export function reduceWebSocketFeedState(
     case "socket-open":
       // A browser socket only proves that the API is reachable. The account is
       // connected only after the backend sends a valid MT5 account snapshot.
-      return { ...state, isConnected: false, error: null };
+      // Preserve an existing MT5 snapshot while the transport reconnects.
+      return { ...state, error: null };
     case "socket-closed":
-      return { ...state, isConnected: false };
+      // Losing the browser transport does not mean MT5 disconnected. Keep the
+      // last explicit backend status until a fresh snapshot replaces it.
+      return state;
     case "error":
       return { ...state, error: action.message };
     case "update": {
@@ -128,15 +154,18 @@ export function useWebSocket({
   enabled,
   token,
   accountId,
+  getAccessToken,
 }: UseWebSocketOptions): UseWebSocketReturn {
   const [feed, dispatch] = useReducer(reduceWebSocketFeedState, initialFeedState);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttempts = useRef(0);
+  const connectionGenerationRef = useRef(0);
   const connectionEnabledRef = useRef(false);
-  const maxReconnectAttempts = 10;
-  const connectRef = useRef<() => void>(() => {});
+  const lastMessageAtRef = useRef(0);
+  const connectRef = useRef<() => Promise<void>>(async () => {});
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -145,16 +174,49 @@ export function useWebSocket({
     }
   }, []);
 
-  const connect = useCallback(() => {
+  const clearHeartbeat = useCallback(() => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+  }, []);
+
+  const scheduleReconnect = useCallback(() => {
+    if (!connectionEnabledRef.current || reconnectTimeoutRef.current) return;
+
+    const delay = webSocketReconnectDelay(reconnectAttempts.current);
+    reconnectAttempts.current += 1;
+    reconnectTimeoutRef.current = setTimeout(() => {
+      reconnectTimeoutRef.current = null;
+      void connectRef.current();
+    }, delay);
+  }, []);
+
+  const connect = useCallback(async () => {
     if (!enabled || !token || !accountId || !connectionEnabledRef.current) return;
 
     clearReconnectTimer();
+    clearHeartbeat();
+    const generation = ++connectionGenerationRef.current;
     const previousSocket = wsRef.current;
     wsRef.current = null;
     detachAndClose(previousSocket);
 
     try {
-      const ws = new WebSocket(buildAuthenticatedWsUrl(WS_URL, token, accountId));
+      const freshToken = await resolveWebSocketAccessToken(token, getAccessToken);
+      if (
+        generation !== connectionGenerationRef.current ||
+        !connectionEnabledRef.current
+      ) {
+        return;
+      }
+      if (!freshToken) {
+        throw new Error("A fresh access token is unavailable");
+      }
+
+      const ws = new WebSocket(
+        buildAuthenticatedWsUrl(WS_URL, freshToken, accountId)
+      );
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -162,10 +224,29 @@ export function useWebSocket({
         console.log("WebSocket connected");
         dispatch({ type: "socket-open" });
         reconnectAttempts.current = 0;
+        lastMessageAtRef.current = Date.now();
+        clearHeartbeat();
+        heartbeatIntervalRef.current = setInterval(() => {
+          if (wsRef.current !== ws) {
+            clearHeartbeat();
+            return;
+          }
+          if (
+            ws.readyState !== WebSocket.OPEN ||
+            isWebSocketConnectionStale(lastMessageAtRef.current)
+          ) {
+            ws.close();
+            return;
+          }
+          ws.send("ping");
+        }, HEARTBEAT_INTERVAL_MS);
       };
 
       ws.onmessage = (event) => {
         if (wsRef.current !== ws) return;
+        lastMessageAtRef.current = Date.now();
+        if (event.data === "pong") return;
+
         try {
           const data: WebSocketMessage = JSON.parse(event.data);
           if (data.account_id && data.account_id !== accountId) return;
@@ -189,26 +270,27 @@ export function useWebSocket({
       ws.onclose = () => {
         if (wsRef.current !== ws) return;
         wsRef.current = null;
+        clearHeartbeat();
         dispatch({ type: "socket-closed" });
         console.log("WebSocket disconnected");
 
         if (!connectionEnabledRef.current) return;
-        if (reconnectAttempts.current < maxReconnectAttempts) {
-          const delay = Math.min(1000 * 2 ** reconnectAttempts.current, 30000);
-          console.log(`Reconnecting in ${delay}ms...`);
-          reconnectTimeoutRef.current = setTimeout(() => {
-            reconnectAttempts.current += 1;
-            connectRef.current();
-          }, delay);
-        } else {
-          dispatch({ type: "error", message: "Max reconnection attempts reached" });
-        }
+        scheduleReconnect();
       };
     } catch (creationError) {
       dispatch({ type: "error", message: "Failed to create WebSocket connection" });
       console.error("WebSocket creation error:", creationError);
+      scheduleReconnect();
     }
-  }, [accountId, clearReconnectTimer, enabled, token]);
+  }, [
+    accountId,
+    clearHeartbeat,
+    clearReconnectTimer,
+    enabled,
+    getAccessToken,
+    scheduleReconnect,
+    token,
+  ]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -222,21 +304,63 @@ export function useWebSocket({
 
   const reconnect = useCallback(() => {
     reconnectAttempts.current = 0;
-    connectRef.current();
-  }, []);
+    clearReconnectTimer();
+    void connectRef.current();
+  }, [clearReconnectTimer]);
 
   useEffect(() => {
     connectionEnabledRef.current = enabled && Boolean(token) && Boolean(accountId);
     if (!connectionEnabledRef.current) return;
 
-    connectRef.current();
+    void connectRef.current();
 
     return () => {
       connectionEnabledRef.current = false;
+      connectionGenerationRef.current += 1;
       clearReconnectTimer();
+      clearHeartbeat();
       const socket = wsRef.current;
       wsRef.current = null;
       detachAndClose(socket);
+    };
+  }, [accountId, clearHeartbeat, clearReconnectTimer, enabled, token]);
+
+  useEffect(() => {
+    if (!enabled || !token || !accountId) return;
+
+    const handleWake = (event: Event) => {
+      if (
+        event.type === "visibilitychange" &&
+        document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+
+      reconnectAttempts.current = 0;
+      clearReconnectTimer();
+      const socket = wsRef.current;
+      if (
+        !socket ||
+        socket.readyState !== WebSocket.OPEN ||
+        isWebSocketConnectionStale(lastMessageAtRef.current)
+      ) {
+        void connectRef.current();
+        return;
+      }
+
+      socket.send("ping");
+    };
+
+    document.addEventListener("visibilitychange", handleWake);
+    window.addEventListener("focus", handleWake);
+    window.addEventListener("online", handleWake);
+    window.addEventListener("pageshow", handleWake);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleWake);
+      window.removeEventListener("focus", handleWake);
+      window.removeEventListener("online", handleWake);
+      window.removeEventListener("pageshow", handleWake);
     };
   }, [accountId, clearReconnectTimer, enabled, token]);
 

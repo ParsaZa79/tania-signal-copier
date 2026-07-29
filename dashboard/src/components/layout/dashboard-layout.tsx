@@ -477,6 +477,7 @@ function WorkOSDashboardLayout({ children }: DashboardLayoutProps) {
     <AuthenticatedDashboardLayout
       session={session}
       setSession={setSession}
+      getAccessToken={getAccessToken}
       onLogout={signOutAction}
     >
       {children}
@@ -488,11 +489,13 @@ function AuthenticatedDashboardLayout({
   children,
   session,
   setSession,
+  getAccessToken,
   onLogout,
 }: {
   children: ReactNode;
   session: AuthSession;
   setSession: (session: AuthSession) => void;
+  getAccessToken: () => Promise<string | undefined>;
   onLogout?: () => Promise<void> | void;
 }) {
   const pathname = usePathname();
@@ -504,6 +507,7 @@ function AuthenticatedDashboardLayout({
     enabled: session.setupComplete && Boolean(session.activeAccountId),
     token: session.token,
     accountId: session.activeAccountId,
+    getAccessToken,
   });
   const [headerPrices, setHeaderPrices] = useState<Record<string, PriceData>>({});
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);

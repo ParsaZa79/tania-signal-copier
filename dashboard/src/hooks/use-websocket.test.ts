@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AccountInfo } from "@/types";
 import {
+  isWebSocketConnectionStale,
   reduceWebSocketFeedState,
+  resolveWebSocketAccessToken,
+  webSocketReconnectDelay,
   type WebSocketFeedState,
 } from "./use-websocket";
 
@@ -28,6 +31,22 @@ describe("reduceWebSocketFeedState", () => {
     expect(state.isConnected).toBe(false);
     expect(state.account).toBeNull();
     expect(state.hasSnapshot).toBe(false);
+  });
+
+  it("does not report MT5 as disconnected when only the browser socket drops", () => {
+    const connectedState = {
+      ...emptyState,
+      account,
+      isConnected: true,
+      hasSnapshot: true,
+    };
+    const state = reduceWebSocketFeedState(connectedState, {
+      type: "socket-closed",
+    });
+
+    expect(state.isConnected).toBe(true);
+    expect(state.account).toEqual(account);
+    expect(state.hasSnapshot).toBe(true);
   });
 
   it("records a snapshot even when the backend reports MT5 as disconnected", () => {
@@ -106,5 +125,28 @@ describe("reduceWebSocketFeedState", () => {
 
     expect(state.isConnected).toBe(false);
     expect(state.account).toBeNull();
+  });
+});
+
+describe("WebSocket recovery policy", () => {
+  it("uses a freshly fetched token instead of the stale session snapshot", async () => {
+    const freshToken = await resolveWebSocketAccessToken(
+      "expired-token",
+      async () => "fresh-token"
+    );
+
+    expect(freshToken).toBe("fresh-token");
+  });
+
+  it("keeps retrying indefinitely while capping the delay", () => {
+    expect(webSocketReconnectDelay(0)).toBe(1_000);
+    expect(webSocketReconnectDelay(4)).toBe(16_000);
+    expect(webSocketReconnectDelay(5)).toBe(30_000);
+    expect(webSocketReconnectDelay(100)).toBe(30_000);
+  });
+
+  it("detects a silent socket after the heartbeat window", () => {
+    expect(isWebSocketConnectionStale(10_000, 54_999)).toBe(false);
+    expect(isWebSocketConnectionStale(10_000, 55_000)).toBe(true);
   });
 });
