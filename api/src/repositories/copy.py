@@ -25,6 +25,7 @@ from src.models.copy import (
     CopySubscriptionStatus,
     CopyTradeEvent,
     CopyTraderProfile,
+    CopyVolumeMode,
 )
 from src.models.user import UserRole, UserStatus
 from src.repositories.users import reconcile_verified_user_profile
@@ -415,6 +416,7 @@ async def save_risk_policy(
     for field, default_value in defaults.items():
         next_value = values.get(field) if values.get(field) is not None else default_value
         setattr(policy, field, next_value)
+    policy.daily_loss_limit_amount = values.get("daily_loss_limit_amount")
     policy.require_stop_loss = bool(values.get("require_stop_loss", True))
     policy.allowed_symbols = values.get("allowed_symbols") or []
     await _flush_and_refresh(session, policy)
@@ -428,6 +430,7 @@ def serialize_risk_policy(policy: CopyRiskPolicy) -> dict[str, Any]:
         "preset": policy.preset.value,
         "risk_per_trade_pct": policy.risk_per_trade_pct,
         "daily_loss_limit_pct": policy.daily_loss_limit_pct,
+        "daily_loss_limit_amount": policy.daily_loss_limit_amount,
         "total_open_risk_pct": policy.total_open_risk_pct,
         "max_open_trades": policy.max_open_trades,
         "require_stop_loss": policy.require_stop_loss,
@@ -444,6 +447,8 @@ async def create_subscription(
     follower_account_id: UUID,
     mode: CopyMode,
     risk_preset: CopyRiskPreset,
+    volume_mode: CopyVolumeMode,
+    fixed_volume: float,
     overlap_acknowledged: bool,
     country_code: str | None,
     disclosure_version: str | None,
@@ -495,6 +500,8 @@ async def create_subscription(
     subscription.mode = CopyMode.PAPER if mode is CopyMode.LIVE else mode
     subscription.status = CopySubscriptionStatus.ACTIVE
     subscription.risk_preset = risk_preset
+    subscription.volume_mode = volume_mode
+    subscription.fixed_volume = fixed_volume
     subscription.overlap_acknowledged = overlap_acknowledged
     subscription.country_code = country_code
     subscription.disclosure_version = disclosure_version
@@ -515,6 +522,8 @@ def serialize_subscription(
         "mode": subscription.mode.value,
         "status": subscription.status.value,
         "risk_preset": subscription.risk_preset.value,
+        "volume_mode": subscription.volume_mode.value,
+        "fixed_volume": subscription.fixed_volume,
         "overlap_acknowledged": subscription.overlap_acknowledged,
         "country_code": subscription.country_code,
         "disclosure_version": subscription.disclosure_version,
@@ -558,6 +567,10 @@ async def patch_subscription(
         subscription.status = CopySubscriptionStatus(values["status"])
     if values.get("risk_preset"):
         subscription.risk_preset = CopyRiskPreset(values["risk_preset"])
+    if values.get("volume_mode"):
+        subscription.volume_mode = CopyVolumeMode(values["volume_mode"])
+    if values.get("fixed_volume") is not None:
+        subscription.fixed_volume = float(values["fixed_volume"])
     if values.get("overlap_acknowledged") is not None:
         subscription.overlap_acknowledged = bool(values["overlap_acknowledged"])
     await _flush_and_refresh(session, subscription)

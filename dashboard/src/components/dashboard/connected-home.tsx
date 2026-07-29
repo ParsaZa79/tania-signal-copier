@@ -176,6 +176,8 @@ const previewSnapshot: HomeSnapshot = {
         mode: "paper",
         status: "active",
         risk_preset: "conservative",
+        volume_mode: "fixed",
+        fixed_volume: 0.01,
         overlap_acknowledged: false,
         country_code: null,
         disclosure_version: null,
@@ -221,6 +223,7 @@ const previewSnapshot: HomeSnapshot = {
     preset: "conservative",
     risk_per_trade_pct: 0.25,
     daily_loss_limit_pct: 1,
+    daily_loss_limit_amount: 250,
     total_open_risk_pct: 1,
     max_open_trades: 3,
     require_stop_loss: true,
@@ -276,13 +279,13 @@ function executionLabel(action: string, traderName: string, symbol: string) {
 function dashboardReadiness(
   isConnected: boolean,
   account: AccountInfo | null,
-  dailyLossPercent: number | null
+  dailyLossLimit: number | null
 ) {
   const accountReady = account !== null;
   return {
     accountReady,
     liveDataReady: isConnected && accountReady,
-    riskPolicyReady: accountReady && dailyLossPercent !== null,
+    riskPolicyReady: accountReady && dailyLossLimit !== null,
   };
 }
 
@@ -364,7 +367,8 @@ export function ConnectedHome({
     snapshot.overview?.subscriptions.filter((item) => item.status === "active").length ?? 0;
   const dailyLossPercent = snapshot.riskPolicy?.daily_loss_limit_pct ?? null;
   const dailyLossLimit =
-    dailyLossPercent === null ? 0 : (account?.balance ?? 0) * (dailyLossPercent / 100);
+    snapshot.riskPolicy?.daily_loss_limit_amount ??
+    (dailyLossPercent === null ? 0 : (account?.balance ?? 0) * (dailyLossPercent / 100));
   const dailyLossUsed = Math.max(0, -todayPnL);
   const dailyLossRemaining = Math.max(0, dailyLossLimit - dailyLossUsed);
   const safetyRemainingPercent =
@@ -377,7 +381,7 @@ export function ConnectedHome({
   const { accountReady, liveDataReady, riskPolicyReady } = dashboardReadiness(
     isConnected,
     account,
-    dailyLossPercent
+    snapshot.riskPolicy ? dailyLossLimit : null
   );
   const dayTone = todayPnL > 0 ? "positive" : todayPnL < 0 ? "negative" : "steady";
 

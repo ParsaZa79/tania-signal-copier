@@ -33,8 +33,8 @@ def test_copy_marketplace_is_the_current_alembic_revision() -> None:
     scripts = ScriptDirectory.from_config(AlembicConfig(API_ROOT / "alembic.ini"))
     head = scripts.get_revision("head")
     assert head is not None
-    assert head.revision == "0004_rebind_workos_identity"
-    assert head.down_revision == "0003_copy_marketplace"
+    assert head.revision == "0005_copy_trade_sizing"
+    assert head.down_revision == "0004_rebind_workos_identity"
 
 
 def test_user_profile_is_owned_by_app_schema_without_auth_foreign_key() -> None:

@@ -26,6 +26,7 @@ class RiskPolicyRequest(BaseModel):
     preset: Literal["conservative", "balanced", "custom"] = "conservative"
     risk_per_trade_pct: float | None = Field(default=None, gt=0, le=1)
     daily_loss_limit_pct: float | None = Field(default=None, gt=0, le=5)
+    daily_loss_limit_amount: float | None = Field(default=None, gt=0, le=1_000_000)
     total_open_risk_pct: float | None = Field(default=None, gt=0, le=5)
     max_open_trades: int | None = Field(default=None, ge=1, le=10)
     require_stop_loss: bool = True
@@ -42,6 +43,8 @@ class SubscriptionRequest(BaseModel):
     follower_account_id: UUID
     mode: Literal["paper", "live"] = "paper"
     risk_preset: Literal["conservative", "balanced", "custom"] = "conservative"
+    volume_mode: Literal["fixed", "source"] = "fixed"
+    fixed_volume: float = Field(default=0.01, gt=0, le=100, multiple_of=0.01)
     overlap_acknowledged: bool = False
     country_code: str | None = Field(default=None, min_length=2, max_length=2)
     disclosure_version: str | None = Field(default=None, max_length=80)
@@ -55,6 +58,8 @@ class SubscriptionRequest(BaseModel):
 class SubscriptionPatch(BaseModel):
     status: Literal["active", "paused", "stopping", "stopped"] | None = None
     risk_preset: Literal["conservative", "balanced", "custom"] | None = None
+    volume_mode: Literal["fixed", "source"] | None = None
+    fixed_volume: float | None = Field(default=None, gt=0, le=100, multiple_of=0.01)
     overlap_acknowledged: bool | None = None
 
 

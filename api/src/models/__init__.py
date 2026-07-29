@@ -23,6 +23,7 @@ from .copy import (
     CopyTradeAction,
     CopyTradeEvent,
     CopyTraderProfile,
+    CopyVolumeMode,
 )
 from .user import UserProfile, UserRole, UserStatus
 
@@ -47,6 +48,7 @@ __all__ = [
     "CopyTradeAction",
     "CopyTradeEvent",
     "CopyTraderProfile",
+    "CopyVolumeMode",
     "LegacyIdentityAlias",
     "MembershipRole",
     "TradingAccount",

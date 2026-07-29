@@ -20,6 +20,7 @@ from src.models.copy import (
     CopyRiskPreset,
     CopyRuntimeStatus,
     CopyTraderProfile,
+    CopyVolumeMode,
 )
 from src.repositories import copy as repository
 from src.schemas.copy import (
@@ -300,7 +301,11 @@ async def put_risk_policy(
         action="copy.risk.updated",
         target_type="trading_account",
         target_id=str(account_id),
-        details={"preset": policy.preset.value},
+        details={
+            "daily_loss_limit_amount": policy.daily_loss_limit_amount,
+            "max_open_trades": policy.max_open_trades,
+            "require_stop_loss": policy.require_stop_loss,
+        },
     )
     return {"success": True, "risk_policy": repository.serialize_risk_policy(policy)}
 
@@ -329,6 +334,8 @@ async def create_subscription(
             follower_account_id=request.follower_account_id,
             mode=CopyMode(request.mode),
             risk_preset=CopyRiskPreset(request.risk_preset),
+            volume_mode=CopyVolumeMode(request.volume_mode),
+            fixed_volume=request.fixed_volume,
             overlap_acknowledged=request.overlap_acknowledged,
             country_code=request.country_code,
             disclosure_version=request.disclosure_version,
@@ -341,7 +348,12 @@ async def create_subscription(
         action="copy.subscription.created",
         target_type="copy_subscription",
         target_id=str(subscription.id),
-        details={"requested_mode": request.mode, "effective_mode": subscription.mode.value},
+        details={
+            "requested_mode": request.mode,
+            "effective_mode": subscription.mode.value,
+            "volume_mode": subscription.volume_mode.value,
+            "fixed_volume": subscription.fixed_volume,
+        },
     )
     return {"success": True, "subscription": repository.serialize_subscription(subscription)}
 

@@ -25,10 +25,16 @@ Public deployment probes:
 - `POST/PATCH /api/copy/traders` — opt in or stop sharing a connected account.
 - `POST/PATCH /api/copy/subscriptions` — create, pause, resume, or drain a copy relationship.
 - `POST /api/copy/subscriptions/{id}/activate-live` — checklist-backed live activation.
-- `GET/PUT /api/copy/accounts/{accountId}/risk-policy` — guided risk presets and hard caps.
+- `GET/PUT /api/copy/accounts/{accountId}/risk-policy` — account-wide copying protection.
 - `GET /api/copy/overview` and `GET /api/copy/executions` — current status and execution history.
 - `POST /api/copy/accounts/{accountId}/emergency-stop` — pause opens or explicitly close all copied positions.
 - `POST /api/internal/copy/runtime/heartbeat` and `/events` — authenticated runtime traffic.
+
+Copy subscriptions use an explicit volume mode. `fixed` applies the follower's configured lot
+size to every copied entry; `source` uses the trader event's exact lot size. Receiving-broker
+minimums, maximums, and increments are validated without silently resizing the order. A separate
+dollar daily-loss limit, maximum simultaneous copied trades, and optional stop-loss requirement
+can block future entries.
 
 Former Telegram, Bot, Analysis, Prompts, and Platform API paths return `410 Gone` for the deprecation release.
 

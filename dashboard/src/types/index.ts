@@ -121,6 +121,7 @@ export interface MT5ConnectResponse {
 export type CopyTradeAction = "open" | "modify" | "reduce" | "close";
 export type CopyRiskPreset = "conservative" | "balanced" | "custom";
 export type CopyTradingMode = "paper" | "live";
+export type CopyVolumeMode = "fixed" | "source";
 export type CopySubscriptionStatus = "draft" | "active" | "paused" | "stopping" | "stopped";
 
 export interface CopyTraderStatistics {
@@ -171,6 +172,7 @@ export interface CopyRiskPolicy {
   preset: CopyRiskPreset;
   risk_per_trade_pct: number;
   daily_loss_limit_pct: number;
+  daily_loss_limit_amount: number | null;
   total_open_risk_pct: number;
   max_open_trades: number;
   require_stop_loss: boolean;
@@ -188,6 +190,8 @@ export interface CopySubscription {
   mode: CopyTradingMode;
   status: CopySubscriptionStatus;
   risk_preset: CopyRiskPreset;
+  volume_mode: CopyVolumeMode;
+  fixed_volume: number;
   overlap_acknowledged: boolean;
   country_code: string | null;
   disclosure_version: string | null;

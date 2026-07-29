@@ -449,6 +449,7 @@ export async function saveCopyRiskPolicy(
     preset: CopyRiskPreset;
     risk_per_trade_pct?: number;
     daily_loss_limit_pct?: number;
+    daily_loss_limit_amount?: number;
     total_open_risk_pct?: number;
     max_open_trades?: number;
     require_stop_loss?: boolean;
@@ -466,6 +467,8 @@ export async function createCopySubscription(input: {
   follower_account_id: string;
   mode: CopyTradingMode;
   risk_preset: CopyRiskPreset;
+  volume_mode: "fixed" | "source";
+  fixed_volume: number;
   overlap_acknowledged: boolean;
   country_code?: string;
   disclosure_version?: string;
@@ -479,7 +482,10 @@ export async function createCopySubscription(input: {
 export async function updateCopySubscription(
   subscriptionId: string,
   input: Partial<
-    Pick<CopySubscription, "status" | "risk_preset" | "overlap_acknowledged">
+    Pick<
+      CopySubscription,
+      "status" | "risk_preset" | "volume_mode" | "fixed_volume" | "overlap_acknowledged"
+    >
   >
 ): Promise<{ success: boolean; subscription: CopySubscription }> {
   return fetchApi(`/api/copy/subscriptions/${encodeURIComponent(subscriptionId)}`, {

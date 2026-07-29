@@ -44,51 +44,14 @@ import { cn } from "@/lib/utils";
 import type {
   CopyAccount,
   CopyOverview,
-  CopyRiskPreset,
   CopySubscription,
   CopyTrader,
   CopyTradingMode,
+  CopyVolumeMode,
 } from "@/types";
 
 type CopyView = "copy" | "share";
-type WizardStep = "account" | "risk" | "review";
-
-const PRESET_DETAILS: Record<
-  CopyRiskPreset,
-  {
-    title: string;
-    summary: string;
-    risk: number;
-    daily: number;
-    total: number;
-    trades: number;
-  }
-> = {
-  conservative: {
-    title: "Conservative",
-    summary: "Small position sizes and the lowest daily limit.",
-    risk: 0.25,
-    daily: 1,
-    total: 1,
-    trades: 3,
-  },
-  balanced: {
-    title: "Balanced",
-    summary: "Moderate position sizes with room for several trades.",
-    risk: 0.5,
-    daily: 2,
-    total: 2.5,
-    trades: 5,
-  },
-  custom: {
-    title: "Custom",
-    summary: "Choose your limits, within the platform safety caps.",
-    risk: 0.25,
-    daily: 1,
-    total: 1,
-    trades: 3,
-  },
-};
+type WizardStep = "account" | "sizing" | "review";
 
 const PREVIEW_TRADERS: CopyTrader[] = [
   {
@@ -452,7 +415,7 @@ function ProgressSteps({ active }: { active: "trader" | WizardStep }) {
   const steps: Array<{ id: "trader" | WizardStep; label: string }> = [
     { id: "trader", label: "Trader" },
     { id: "account", label: "Account" },
-    { id: "risk", label: "Risk" },
+    { id: "sizing", label: "Trade size" },
     { id: "review", label: "Review" },
   ];
   const activeIndex = steps.findIndex((item) => item.id === active);
@@ -893,7 +856,13 @@ function CopyWizard({
   const previousFocus = useRef<HTMLElement | null>(null);
   const [step, setStep] = useState<WizardStep>("account");
   const [accountId, setAccountId] = useState(accounts.find((item) => item.setup_complete)?.id ?? "");
-  const [preset, setPreset] = useState<CopyRiskPreset>("conservative");
+  const [volumeMode, setVolumeMode] = useState<CopyVolumeMode>("fixed");
+  const [fixedVolume, setFixedVolume] = useState("0.01");
+  const [dailyLossLimit, setDailyLossLimit] = useState(() =>
+    String(accountBalance ? Math.max(1, Math.round(accountBalance) / 100) : 5)
+  );
+  const [maxOpenTrades, setMaxOpenTrades] = useState("3");
+  const [requireStopLoss, setRequireStopLoss] = useState(true);
   const [mode, setMode] = useState<CopyTradingMode>("paper");
   const [overlapAcknowledged, setOverlapAcknowledged] = useState(false);
   const [countryCode, setCountryCode] = useState("");
@@ -905,8 +874,20 @@ function CopyWizard({
     trader,
     subscriptions.filter((item) => item.follower_account_id === accountId)
   );
-  const details = PRESET_DETAILS[preset];
-  const estimatedRisk = accountBalance ? (accountBalance * details.risk) / 100 : null;
+  const parsedFixedVolume = Number(fixedVolume);
+  const parsedDailyLossLimit = Number(dailyLossLimit);
+  const parsedMaxOpenTrades = Number(maxOpenTrades);
+  const tradeSizeValid =
+    volumeMode === "source" ||
+    (Number.isFinite(parsedFixedVolume) &&
+      parsedFixedVolume >= 0.01 &&
+      Math.abs(parsedFixedVolume * 100 - Math.round(parsedFixedVolume * 100)) < 1e-8);
+  const protectionValid =
+    Number.isFinite(parsedDailyLossLimit) &&
+    parsedDailyLossLimit > 0 &&
+    Number.isInteger(parsedMaxOpenTrades) &&
+    parsedMaxOpenTrades >= 1 &&
+    parsedMaxOpenTrades <= 10;
 
   useEffect(() => {
     previousFocus.current = document.activeElement as HTMLElement | null;
@@ -939,7 +920,7 @@ function CopyWizard({
   }, [onClose]);
 
   const submit = async () => {
-    if (!accountId) return;
+    if (!accountId || !tradeSizeValid || !protectionValid) return;
     setSaving(true);
     setError(null);
     try {
@@ -949,19 +930,19 @@ function CopyWizard({
         return;
       }
       await saveCopyRiskPolicy(accountId, {
-        preset,
-        risk_per_trade_pct: details.risk,
-        daily_loss_limit_pct: details.daily,
-        total_open_risk_pct: details.total,
-        max_open_trades: details.trades,
-        require_stop_loss: true,
+        preset: "custom",
+        daily_loss_limit_amount: parsedDailyLossLimit,
+        max_open_trades: parsedMaxOpenTrades,
+        require_stop_loss: requireStopLoss,
         allowed_symbols: trader.markets,
       });
       const created = await createCopySubscription({
         trader_id: trader.id,
         follower_account_id: accountId,
         mode,
-        risk_preset: preset,
+        risk_preset: "custom",
+        volume_mode: volumeMode,
+        fixed_volume: parsedFixedVolume || 0.01,
         overlap_acknowledged: overlapAcknowledged,
         country_code: countryCode || undefined,
         disclosure_version: mode === "live" ? "pending-jurisdiction-pack" : undefined,
@@ -981,7 +962,8 @@ function CopyWizard({
     }
   };
 
-  const canReview = Boolean(accountId) && (overlapping.length === 0 || overlapAcknowledged);
+  const canContinueFromAccount =
+    Boolean(accountId) && (overlapping.length === 0 || overlapAcknowledged);
   const liveChecksComplete =
     mode === "paper" ||
     (["account_connected", "risk_reviewed", "trader_available", "losses_understood"].every(
@@ -1003,7 +985,7 @@ function CopyWizard({
               <p className="text-xs uppercase tracking-[0.16em] text-text-muted">Copy {trader.display_name}</p>
               <h2 id="copy-wizard-title" className="mt-1 text-xl font-semibold text-text-primary">
                 {step === "account" && "Choose where trades should go"}
-                {step === "risk" && "Choose your loss limits"}
+                {step === "sizing" && "Choose trade size and protection"}
                 {step === "review" && "Review before you start"}
               </h2>
             </div>
@@ -1047,31 +1029,146 @@ function CopyWizard({
             </div>
           )}
 
-          {step === "risk" && (
-            <div>
-              <p className="mb-5 text-sm text-text-muted">Risk means the estimated amount that could be lost if a trade reaches its stop loss.</p>
-              <div className="grid gap-3 md:grid-cols-3">
-                {(Object.keys(PRESET_DETAILS) as CopyRiskPreset[]).map((item) => {
-                  const option = PRESET_DETAILS[item];
-                  return (
-                    <button key={item} type="button" onClick={() => setPreset(item)} aria-pressed={preset === item} className={cn("rounded-xl border p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent", preset === item ? "border-accent bg-accent/5" : "border-border-subtle hover:border-border-default")}>
-                      <span className="flex items-center justify-between gap-2"><span className="text-sm font-semibold text-text-primary">{option.title}</span>{preset === item && <Check className="h-4 w-4 text-accent" />}</span>
-                      <span className="mt-2 block text-xs leading-5 text-text-muted">{option.summary}</span>
-                      <span className="mt-4 block text-sm font-medium text-text-secondary">{option.risk}% per trade</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="mt-5 rounded-xl border border-border-subtle bg-bg-tertiary/50 p-4">
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <Stat label="Daily loss limit" value={`${details.daily}%`} />
-                  <Stat label="Combined open risk" value={`${details.total}%`} />
-                  <Stat label="Copied trades at once" value={String(details.trades)} />
+          {step === "sizing" && (
+            <div className="space-y-6">
+              <section aria-labelledby="trade-size-heading">
+                <div>
+                  <h3 id="trade-size-heading" className="text-sm font-semibold text-text-primary">
+                    Trade size
+                  </h3>
+                  <p className="mt-1 text-sm text-text-muted">
+                    Choose how large each copied entry should be on your account.
+                  </p>
                 </div>
-                <p className="mt-4 border-t border-border-subtle pt-4 text-sm text-text-muted">
-                  {estimatedRisk !== null ? `On a $${accountBalance?.toLocaleString()} account, one copied trade would risk about $${estimatedRisk.toLocaleString(undefined, { maximumFractionDigits: 2 })} if its stop loss is reached.` : "The exact money estimate will use the receiving account balance when a trade arrives."}
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setVolumeMode("fixed")}
+                    aria-pressed={volumeMode === "fixed"}
+                    className={cn(
+                      "rounded-xl border p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                      volumeMode === "fixed"
+                        ? "border-accent bg-accent/5"
+                        : "border-border-subtle hover:border-border-default"
+                    )}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-text-primary">Fixed lot</span>
+                      {volumeMode === "fixed" && <Check className="h-4 w-4 text-accent" />}
+                    </span>
+                    <span className="mt-2 block text-xs leading-5 text-text-muted">
+                      Use one lot size for every copied entry. Best for a small account.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVolumeMode("source")}
+                    aria-pressed={volumeMode === "source"}
+                    className={cn(
+                      "rounded-xl border p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                      volumeMode === "source"
+                        ? "border-accent bg-accent/5"
+                        : "border-border-subtle hover:border-border-default"
+                    )}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-text-primary">
+                        Same as trader
+                      </span>
+                      {volumeMode === "source" && <Check className="h-4 w-4 text-accent" />}
+                    </span>
+                    <span className="mt-2 block text-xs leading-5 text-text-muted">
+                      Copy the trader&apos;s exact lot size. This can be much larger than 0.01.
+                    </span>
+                  </button>
+                </div>
+
+                {volumeMode === "fixed" && (
+                  <div className="mt-4 max-w-xs">
+                    <Input
+                      label="Lot size per copied trade"
+                      type="number"
+                      inputMode="decimal"
+                      min="0.01"
+                      max="100"
+                      step="0.01"
+                      value={fixedVolume}
+                      onChange={(event) => setFixedVolume(event.target.value)}
+                      error={
+                        tradeSizeValid
+                          ? undefined
+                          : "Use 0.01 lots or another multiple of 0.01."
+                      }
+                    />
+                  </div>
+                )}
+                <p className="mt-3 text-xs leading-5 text-text-muted">
+                  A trade is skipped if the receiving broker does not support the selected lot
+                  size. The platform will not silently resize it.
                 </p>
-              </div>
+              </section>
+
+              <section
+                aria-labelledby="copy-protection-heading"
+                className="border-t border-border-subtle pt-5"
+              >
+                <h3 id="copy-protection-heading" className="text-sm font-semibold text-text-primary">
+                  Protection
+                </h3>
+                <p className="mt-1 text-sm text-text-muted">
+                  These limits stop future copied entries. They do not change the selected lot
+                  size and apply to every trader copied into this account.
+                </p>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <Input
+                    label="Stop after daily copied loss ($)"
+                    type="number"
+                    inputMode="decimal"
+                    min="0.01"
+                    step="0.01"
+                    value={dailyLossLimit}
+                    onChange={(event) => setDailyLossLimit(event.target.value)}
+                    error={
+                      Number.isFinite(parsedDailyLossLimit) && parsedDailyLossLimit > 0
+                        ? undefined
+                        : "Enter a daily loss limit."
+                    }
+                  />
+                  <Input
+                    label="Maximum open copied trades"
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    max="10"
+                    step="1"
+                    value={maxOpenTrades}
+                    onChange={(event) => setMaxOpenTrades(event.target.value)}
+                    error={
+                      Number.isInteger(parsedMaxOpenTrades) &&
+                      parsedMaxOpenTrades >= 1 &&
+                      parsedMaxOpenTrades <= 10
+                        ? undefined
+                        : "Choose between 1 and 10 trades."
+                    }
+                  />
+                </div>
+                <label className="mt-4 flex items-start gap-3 rounded-xl border border-border-subtle bg-bg-tertiary/35 p-4">
+                  <input
+                    type="checkbox"
+                    checked={requireStopLoss}
+                    onChange={(event) => setRequireStopLoss(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-text-primary">
+                      Only copy trades with a stop loss
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-text-muted">
+                      Entries without protection will be skipped.
+                    </span>
+                  </span>
+                </label>
+              </section>
             </div>
           )}
 
@@ -1080,9 +1177,26 @@ function CopyWizard({
               <div className="grid gap-4 rounded-xl border border-border-subtle bg-bg-tertiary/35 p-5 sm:grid-cols-2">
                 <Stat label="Trader" value={trader.display_name} />
                 <Stat label="Receiving account" value={selectedAccount?.name ?? "Not selected"} />
-                <Stat label="Risk choice" value={PRESET_DETAILS[preset].title} />
-                <Stat label="Risk per trade" value={`${details.risk}% of account balance`} />
+                <Stat
+                  label="Trade size"
+                  value={
+                    volumeMode === "source"
+                      ? "Same as trader"
+                      : `${parsedFixedVolume.toFixed(2)} lots per trade`
+                  }
+                />
+                <Stat
+                  label="Protection"
+                  value={`Stop after $${parsedDailyLossLimit.toFixed(2)} daily loss · ${parsedMaxOpenTrades} open max`}
+                />
               </div>
+              {volumeMode === "source" && (
+                <div className="rounded-xl border border-warning/25 bg-warning/5 px-4 py-3 text-sm leading-5 text-text-secondary">
+                  The trader&apos;s lot size may be designed for a much larger account. Copied
+                  orders that exceed your broker&apos;s limits will be skipped, but supported
+                  orders will use the trader&apos;s full size.
+                </div>
+              )}
 
               <fieldset>
                 <legend className="text-sm font-semibold text-text-primary">Start in paper or live mode?</legend>
@@ -1099,7 +1213,7 @@ function CopyWizard({
                   <div className="mt-4 space-y-3">
                     {[
                       ["account_connected", "My receiving MT5 account is connected and trading is enabled."],
-                      ["risk_reviewed", "I reviewed the money-at-risk example and selected my limits."],
+                      ["risk_reviewed", "I reviewed the trade size and protection settings."],
                       ["trader_available", "I understand this trader can stop sharing at any time."],
                       ["losses_understood", "I understand copied trades can lose real money."],
                     ].map(([key, label]) => (
@@ -1115,11 +1229,11 @@ function CopyWizard({
         </div>
 
         <div className="sticky bottom-0 flex items-center justify-between gap-3 border-t border-border-subtle bg-bg-secondary/95 px-5 py-4 backdrop-blur-xl sm:px-7">
-          <Button variant="ghost" onClick={() => { if (step === "account") onClose(); else setStep(step === "review" ? "risk" : "account"); }} disabled={saving}>
+          <Button variant="ghost" onClick={() => { if (step === "account") onClose(); else setStep(step === "review" ? "sizing" : "account"); }} disabled={saving}>
             {step !== "account" && <ArrowLeft className="h-4 w-4" />}{step === "account" ? "Cancel" : "Back"}
           </Button>
-          {step === "account" && <Button variant="accent" onClick={() => setStep("risk")} disabled={!canReview}>Continue <ArrowRight className="h-4 w-4" /></Button>}
-          {step === "risk" && <Button variant="accent" onClick={() => setStep("review")}>Review <ArrowRight className="h-4 w-4" /></Button>}
+          {step === "account" && <Button variant="accent" onClick={() => setStep("sizing")} disabled={!canContinueFromAccount}>Continue <ArrowRight className="h-4 w-4" /></Button>}
+          {step === "sizing" && <Button variant="accent" onClick={() => setStep("review")} disabled={!tradeSizeValid || !protectionValid}>Review <ArrowRight className="h-4 w-4" /></Button>}
           {step === "review" && <Button variant="accent" onClick={() => void submit()} disabled={saving || !liveChecksComplete}>{saving && <IOSSpinner size={16} />}{mode === "live" ? "Start live copying" : "Start paper copying"}</Button>}
         </div>
       </div>
@@ -1156,7 +1270,7 @@ function ActiveCopies({ subscriptions, accounts, onChanged }: { subscriptions: C
       <div className="mt-4 divide-y divide-border-subtle rounded-xl border border-border-subtle bg-bg-secondary/45">
         {subscriptions.map((item) => (
           <div key={item.id} className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div><p className="text-sm font-medium text-text-primary">{item.trader_name}</p><p className="mt-1 text-xs text-text-muted">{accounts.find((account) => account.id === item.follower_account_id)?.name ?? "Trading account"} · {item.mode === "paper" ? "Paper copying" : "Live copying"} · {PRESET_DETAILS[item.risk_preset].title}</p></div>
+            <div><p className="text-sm font-medium text-text-primary">{item.trader_name}</p><p className="mt-1 text-xs text-text-muted">{accounts.find((account) => account.id === item.follower_account_id)?.name ?? "Trading account"} · {item.mode === "paper" ? "Paper copying" : "Live copying"} · {item.volume_mode === "source" ? "Same lot as trader" : `${(item.fixed_volume ?? 0.01).toFixed(2)} fixed lots`}</p></div>
             <Button size="sm" variant="outline" onClick={() => void toggle(item)} disabled={updating === item.id}>{updating === item.id ? <IOSSpinner size={14} /> : item.status === "paused" ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}{item.status === "paused" ? "Resume" : "Pause new trades"}</Button>
           </div>
         ))}

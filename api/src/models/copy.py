@@ -41,6 +41,11 @@ class CopyRiskPreset(StrEnum):
     CUSTOM = "custom"
 
 
+class CopyVolumeMode(StrEnum):
+    FIXED = "fixed"
+    SOURCE = "source"
+
+
 class CopySubscriptionStatus(StrEnum):
     DRAFT = "draft"
     ACTIVE = "active"
@@ -167,6 +172,7 @@ class CopyRiskPolicy(TimestampMixin, Base):
     daily_loss_limit_pct: Mapped[float] = mapped_column(
         Float, nullable=False, default=1.0, server_default="1"
     )
+    daily_loss_limit_amount: Mapped[float | None] = mapped_column(Float)
     total_open_risk_pct: Mapped[float] = mapped_column(
         Float, nullable=False, default=1.0, server_default="1"
     )
@@ -250,6 +256,21 @@ class CopySubscription(TimestampMixin, Base):
         nullable=False,
         default=CopyRiskPreset.CONSERVATIVE,
         server_default=CopyRiskPreset.CONSERVATIVE.value,
+    )
+    volume_mode: Mapped[CopyVolumeMode] = mapped_column(
+        Enum(
+            CopyVolumeMode,
+            name="copy_volume_mode",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=CopyVolumeMode.FIXED,
+        server_default=CopyVolumeMode.FIXED.value,
+    )
+    fixed_volume: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.01, server_default="0.01"
     )
     overlap_acknowledged: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")

@@ -28,6 +28,7 @@ from src.models.copy import (
     CopyTicketMapping,
     CopyTradeAction,
     CopyTradeEvent,
+    CopyVolumeMode,
 )
 
 
@@ -54,6 +55,24 @@ def evaluate_risk_limits(
         return "daily_loss_limit_reached"
     if current_open_risk_pct + next_trade_risk_pct > total_open_risk_pct:
         return "combined_open_risk_limit_reached"
+    return None
+
+
+def evaluate_daily_loss_limit(
+    *,
+    daily_copy_pnl: float,
+    daily_loss_limit_amount: float | None,
+    balance: float,
+    legacy_daily_loss_limit_pct: float,
+) -> str | None:
+    """Evaluate the dollar protection, with percentage fallback for old policies."""
+    daily_copy_loss = max(0.0, -daily_copy_pnl)
+    if daily_loss_limit_amount is not None:
+        return "daily_loss_limit_reached" if daily_copy_loss >= daily_loss_limit_amount else None
+    if balance <= 0:
+        return "account_balance_unavailable"
+    if daily_copy_loss / balance * 100 >= legacy_daily_loss_limit_pct:
+        return "daily_loss_limit_reached"
     return None
 
 
@@ -87,6 +106,38 @@ def calculate_risk_volume(
     if rounded > volume_max:
         rounded = volume_max
     return RiskSizingResult(round(rounded, 8), None)
+
+
+def select_copy_volume(
+    *,
+    volume_mode: CopyVolumeMode,
+    fixed_volume: float,
+    source_volume: float | None,
+    volume_min: float = 0.01,
+    volume_max: float = 100.0,
+    volume_step: float = 0.01,
+) -> RiskSizingResult:
+    """Validate the user's explicit lot choice against receiving-broker constraints."""
+    if volume_mode is CopyVolumeMode.SOURCE:
+        if source_volume is None or source_volume <= 0:
+            return RiskSizingResult(None, "source_volume_required")
+        requested = source_volume
+    else:
+        if fixed_volume <= 0:
+            return RiskSizingResult(None, "fixed_volume_required")
+        requested = fixed_volume
+
+    if requested < volume_min:
+        return RiskSizingResult(None, "copy_volume_below_broker_minimum")
+    if requested > volume_max:
+        return RiskSizingResult(None, "copy_volume_above_broker_maximum")
+    if volume_step <= 0:
+        return RiskSizingResult(None, "broker_volume_step_unavailable")
+
+    normalized = round(requested / volume_step) * volume_step
+    if abs(normalized - requested) > max(1e-8, volume_step * 1e-6):
+        return RiskSizingResult(None, "copy_volume_not_supported_by_broker")
+    return RiskSizingResult(round(normalized, 8), None)
 
 
 class RuntimeManagerError(RuntimeError):
@@ -165,7 +216,23 @@ class RuntimeManagerClient:
         return await asyncio.to_thread(send)
 
 
-async def _open_ticket_count(session: AsyncSession, subscription_id: UUID) -> int:
+async def _account_open_ticket_count(session: AsyncSession, account_id: UUID) -> int:
+    value = await session.scalar(
+        select(func.count())
+        .select_from(CopyTicketMapping)
+        .join(
+            CopySubscription,
+            CopySubscription.id == CopyTicketMapping.subscription_id,
+        )
+        .where(
+            CopySubscription.follower_account_id == account_id,
+            CopyTicketMapping.is_open.is_(True),
+        )
+    )
+    return int(value or 0)
+
+
+async def _subscription_open_ticket_count(session: AsyncSession, subscription_id: UUID) -> int:
     value = await session.scalar(
         select(func.count())
         .select_from(CopyTicketMapping)
@@ -193,29 +260,27 @@ async def _risk_decision(
         return RiskSizingResult(None, "stop_loss_required")
     if policy.allowed_symbols and event.symbol not in policy.allowed_symbols:
         return RiskSizingResult(None, "symbol_not_allowed")
-    if await _open_ticket_count(session, subscription.id) >= policy.max_open_trades:
+    if (
+        await _account_open_ticket_count(session, subscription.follower_account_id)
+        >= policy.max_open_trades
+    ):
         return RiskSizingResult(None, "open_trade_limit_reached")
     details = runtime.details if runtime else {}
-    limits_reason = evaluate_risk_limits(
-        balance=float(details.get("balance") or 0),
+    daily_limit_reason = evaluate_daily_loss_limit(
         daily_copy_pnl=float(details.get("daily_copy_pnl") or 0),
-        current_open_risk_pct=float(details.get("copy_open_risk_pct") or 0),
-        next_trade_risk_pct=policy.risk_per_trade_pct,
-        daily_loss_limit_pct=policy.daily_loss_limit_pct,
-        total_open_risk_pct=policy.total_open_risk_pct,
+        daily_loss_limit_amount=policy.daily_loss_limit_amount,
+        balance=float(details.get("balance") or 0),
+        legacy_daily_loss_limit_pct=policy.daily_loss_limit_pct,
     )
-    if limits_reason:
-        return RiskSizingResult(None, limits_reason)
+    if daily_limit_reason:
+        return RiskSizingResult(None, daily_limit_reason)
+
     specs = details.get("symbol_specs") if isinstance(details, dict) else {}
     symbol_spec = specs.get(event.symbol, {}) if isinstance(specs, dict) else {}
-    return calculate_risk_volume(
-        balance=float(details.get("balance") or 0),
-        risk_pct=policy.risk_per_trade_pct,
-        entry_price=event.entry_price,
-        stop_loss=event.stop_loss,
-        value_per_price_unit_per_lot=float(
-            symbol_spec.get("value_per_price_unit_per_lot") or 0
-        ),
+    return select_copy_volume(
+        volume_mode=subscription.volume_mode,
+        fixed_volume=subscription.fixed_volume,
+        source_volume=event.source_volume,
         volume_min=float(symbol_spec.get("volume_min") or 0.01),
         volume_max=float(symbol_spec.get("volume_max") or 100),
         volume_step=float(symbol_spec.get("volume_step") or 0.01),
@@ -262,9 +327,7 @@ async def _process_subscription(
         return
 
     policy = await session.scalar(
-        select(CopyRiskPolicy).where(
-            CopyRiskPolicy.account_id == subscription.follower_account_id
-        )
+        select(CopyRiskPolicy).where(CopyRiskPolicy.account_id == subscription.follower_account_id)
     )
     if policy is None:
         execution = CopyExecution(
@@ -312,7 +375,7 @@ async def _process_subscription(
         execution.status = CopyExecutionStatus.EXECUTED
         execution.actual_volume = sizing.volume
         execution.target_ticket = target_ticket
-        execution.broker_result = {"risk_pct": policy.risk_per_trade_pct}
+        execution.broker_result = {"volume_mode": subscription.volume_mode.value}
     else:
         if (
             runtime is None
@@ -348,7 +411,7 @@ async def _process_subscription(
         execution.broker_result = {
             key: result.get(key) for key in ("retcode", "message") if key in result
         }
-        execution.broker_result["risk_pct"] = policy.risk_per_trade_pct
+        execution.broker_result["volume_mode"] = subscription.volume_mode.value
         target_ticket = execution.target_ticket
 
     if event.action is CopyTradeAction.OPEN and event.source_ticket and target_ticket:
@@ -365,7 +428,7 @@ async def _process_subscription(
         await session.flush()
         if (
             subscription.status is CopySubscriptionStatus.STOPPING
-            and await _open_ticket_count(session, subscription.id) == 0
+            and await _subscription_open_ticket_count(session, subscription.id) == 0
         ):
             subscription.status = CopySubscriptionStatus.STOPPED
 
