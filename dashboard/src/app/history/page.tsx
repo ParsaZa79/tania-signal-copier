@@ -190,7 +190,7 @@ function TradeRow({ trade }: { trade: TradeHistoryEntry }) {
       </td>
       <td className="px-6 py-4 text-right">
         <span className="text-sm text-text-secondary tabular-nums font-mono">
-          {formatNumber(trade.price_open, 5)}
+          {trade.price_open == null ? "—" : formatNumber(trade.price_open, 5)}
         </span>
       </td>
       <td className="px-6 py-4 text-right">

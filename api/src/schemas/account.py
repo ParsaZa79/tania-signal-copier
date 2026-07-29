@@ -26,7 +26,7 @@ class TradeHistoryEntry(BaseModel):
     symbol: str
     order_type: str
     volume: float
-    price_open: float
+    price_open: float | None
     price_close: float
     sl: float | None = None
     tp: float | None = None

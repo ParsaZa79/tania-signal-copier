@@ -59,7 +59,7 @@ export interface TradeHistoryEntry {
   symbol: string;
   order_type: string;
   volume: number;
-  price_open: number;
+  price_open: number | null;
   price_close: number;
   sl: number | null;
   tp: number | null;

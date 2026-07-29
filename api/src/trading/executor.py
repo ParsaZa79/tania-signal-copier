@@ -21,6 +21,91 @@ from .mt5_adapter import MT5Adapter, create_mt5_adapter
 T = TypeVar("T")
 
 
+def _deal_timestamp(deal: Any) -> int:
+    """Return a stable timestamp for sorting MT5 deals."""
+    return int(getattr(deal, "time_msc", 0) or int(getattr(deal, "time", 0)) * 1000)
+
+
+def _pair_closed_deals(deals: list[Any]) -> list[dict]:
+    """Pair MT5 exit deals with their position entries.
+
+    MT5 exposes opening and closing fills as separate deals. This reconstructs
+    the opening state for each exit using ``position_id`` and maintains the
+    volume-weighted entry price across multiple fills and partial closes.
+    """
+    states: dict[int, dict[str, Any]] = {}
+    closed_deals: list[dict] = []
+
+    for deal in sorted(deals, key=lambda item: (_deal_timestamp(item), item.ticket)):
+        entry = int(getattr(deal, "entry", 0))
+        position_id = int(getattr(deal, "position_id", 0) or 0)
+        state_key = position_id or int(getattr(deal, "order", 0) or deal.ticket)
+        volume = float(getattr(deal, "volume", 0.0) or 0.0)
+        price = float(getattr(deal, "price", 0.0) or 0.0)
+        deal_time = datetime.fromtimestamp(deal.time, tz=UTC)
+        state = states.setdefault(
+            state_key,
+            {
+                "volume": 0.0,
+                "price_open": None,
+                "opened_at": None,
+                "type": None,
+            },
+        )
+
+        # DEAL_ENTRY_IN: add a fill to the open position.
+        if entry == 0:
+            current_volume = float(state["volume"])
+            next_volume = current_volume + volume
+            if next_volume > 0:
+                current_price = float(state["price_open"] or 0.0)
+                state["price_open"] = (
+                    current_price * current_volume + price * volume
+                ) / next_volume
+            state["volume"] = next_volume
+            if state["opened_at"] is None:
+                state["opened_at"] = deal_time
+            state["type"] = int(getattr(deal, "type", 0))
+            continue
+
+        # DEAL_ENTRY_OUT: close all or part of the current position.
+        if entry != 1:
+            continue
+
+        exit_type = int(getattr(deal, "type", 0))
+        position_type = state["type"]
+        if position_type is None and exit_type in (0, 1):
+            position_type = 1 - exit_type
+
+        closed_deals.append(
+            {
+                "ticket": deal.ticket,
+                "order": getattr(deal, "order", 0),
+                "time": deal_time,
+                "opened_at": state["opened_at"] or deal_time,
+                "symbol": deal.symbol,
+                "type": position_type if position_type is not None else exit_type,
+                "volume": volume,
+                "price_open": state["price_open"],
+                "price": price,
+                "profit": deal.profit,
+                "swap": getattr(deal, "swap", 0.0),
+                "commission": getattr(deal, "commission", 0.0),
+                "comment": getattr(deal, "comment", ""),
+                "position_id": position_id,
+            }
+        )
+
+        remaining_volume = max(0.0, float(state["volume"]) - volume)
+        state["volume"] = remaining_volume
+        if remaining_volume <= 1e-9:
+            state["price_open"] = None
+            state["opened_at"] = None
+            state["type"] = None
+
+    return closed_deals
+
+
 def with_reconnect[T](method: Callable[..., T]) -> Callable[..., T]:
     """Decorator that ensures connection before executing a method.
 
@@ -1419,26 +1504,40 @@ class MT5Executor:
         if not deals:
             return []
 
-        result = []
-        for deal in deals:
-            # Filter to only closed trades (entry=1 means exit/close)
-            # entry: 0=in, 1=out, 2=reverse
-            if getattr(deal, "entry", 0) != 1:
+        all_deals = list(deals)
+        requested_exit_tickets = {
+            deal.ticket for deal in all_deals if getattr(deal, "entry", 0) == 1
+        }
+        deals_by_position: dict[int, list[Any]] = {}
+        for deal in all_deals:
+            position_id = int(getattr(deal, "position_id", 0) or 0)
+            deals_by_position.setdefault(position_id, []).append(deal)
+
+        # An entry can predate the requested reporting window. Fetch the full
+        # position history only for exits whose opening fill is missing.
+        for position_id, position_deals in list(deals_by_position.items()):
+            exits = [deal for deal in position_deals if getattr(deal, "entry", 0) == 1]
+            if not exits or position_id == 0:
+                continue
+            first_exit_at = min(_deal_timestamp(deal) for deal in exits)
+            has_entry = any(
+                getattr(deal, "entry", 0) == 0 and _deal_timestamp(deal) <= first_exit_at
+                for deal in position_deals
+            )
+            if has_entry:
                 continue
 
-            result.append({
-                "ticket": deal.ticket,
-                "order": getattr(deal, "order", 0),
-                "time": datetime.fromtimestamp(deal.time, tz=UTC),
-                "symbol": deal.symbol,
-                "type": deal.type,  # 0=buy, 1=sell
-                "volume": deal.volume,
-                "price": deal.price,
-                "profit": deal.profit,
-                "swap": getattr(deal, "swap", 0.0),
-                "commission": getattr(deal, "commission", 0.0),
-                "comment": getattr(deal, "comment", ""),
-                "position_id": getattr(deal, "position_id", 0),
-            })
+            full_position_deals = self._mt5.history_deals_get(position=position_id)
+            if not full_position_deals:
+                continue
+            existing_tickets = {deal.ticket for deal in all_deals}
+            for deal in full_position_deals:
+                if deal.ticket not in existing_tickets:
+                    all_deals.append(deal)
+                    existing_tickets.add(deal.ticket)
 
-        return result
+        return [
+            deal
+            for deal in _pair_closed_deals(all_deals)
+            if deal["ticket"] in requested_exit_tickets
+        ]

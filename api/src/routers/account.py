@@ -129,14 +129,14 @@ async def get_trade_history(
             symbol=deal["symbol"],
             order_type="buy" if deal["type"] == 0 else "sell",
             volume=round(deal["volume"], 2),  # Round to 2 decimals for lot size precision
-            price_open=0.0,  # Not available in deal, would need order history
+            price_open=deal.get("price_open"),
             price_close=deal["price"],
             sl=None,
             tp=None,
             profit=round(deal["profit"], 2),
             swap=round(deal["swap"], 2),
             commission=round(deal["commission"], 2),
-            opened_at=deal["time"],  # Using close time as placeholder
+            opened_at=deal.get("opened_at", deal["time"]),
             closed_at=deal["time"],
             source="mt5",
         )
