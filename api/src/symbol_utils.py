@@ -4,13 +4,19 @@ BROKER_SUFFIX = "b"
 
 
 def to_broker_symbol(symbol: str, suffix: str = BROKER_SUFFIX) -> str:
-    """Convert a base symbol to broker form by appending suffix when missing."""
+    """Convert a base symbol to broker form without changing suffix casing."""
     normalized = symbol.strip().upper()
     if not normalized:
         return normalized
-    if normalized.lower().endswith(suffix.lower()):
+    if not suffix:
         return normalized
-    return f"{normalized}{suffix}"
+
+    base = (
+        normalized[: -len(suffix)]
+        if normalized.lower().endswith(suffix.lower())
+        else normalized
+    )
+    return f"{base}{suffix}"
 
 
 def to_base_symbol(symbol: str, suffix: str = BROKER_SUFFIX) -> str:

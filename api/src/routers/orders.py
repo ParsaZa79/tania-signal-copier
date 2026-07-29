@@ -55,8 +55,9 @@ async def place_order(
     if is_pending and request.price is None:
         raise HTTPException(status_code=400, detail="Price is required for pending orders")
 
+    requested_symbol = request.symbol.strip()
     signal = TradeSignal(
-        symbol=to_broker_symbol(request.symbol),
+        symbol=requested_symbol,
         order_type=trading_order_type,
         entry_price=request.price,
         stop_loss=request.sl,
@@ -65,7 +66,11 @@ async def place_order(
         comment=request.comment,
     )
 
-    result = executor.execute_signal(signal, lot_size=request.volume)
+    result = executor.execute_signal(
+        signal,
+        lot_size=request.volume,
+        broker_symbol=to_broker_symbol(requested_symbol),
+    )
     return PlaceOrderResponse(
         success=result.get("success", False),
         ticket=result.get("ticket"),
