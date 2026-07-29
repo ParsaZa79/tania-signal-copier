@@ -592,6 +592,7 @@ class LinuxMT5Adapter(MT5AdapterBase):
         self.host = host or os.getenv("MT5_DOCKER_HOST", "localhost")
         self.port = port or int(os.getenv("MT5_DOCKER_PORT", "8001"))
         self._conn: Any = None
+        self._last_error_override: tuple[int, str] | None = None
         # RPyC's classic connection is shared by the WebSocket broadcaster and
         # authenticated HTTP routes. Serialize remote calls so concurrent price
         # and account reads cannot corrupt the request/response stream.
@@ -628,6 +629,7 @@ class LinuxMT5Adapter(MT5AdapterBase):
         if not self._conn:
             return False
         try:
+            self._last_error_override = None
             with suppress(Exception):
                 self._eval("mt5.shutdown()")
             initialized = self._eval(
@@ -635,8 +637,11 @@ class LinuxMT5Adapter(MT5AdapterBase):
             )
             if not initialized:
                 return False
-            account = self._eval("mt5.account_info()")
-            return account is not None
+            account_login = self._eval("getattr(mt5.account_info(), 'login', None)")
+            if account_login is None or int(account_login) != int(login):
+                self._last_error_override = (-1, "MT5 account identity mismatch")
+                return False
+            return True
         except Exception as e:
             print(f"MT5 login failed: {e}")
             return False
@@ -656,6 +661,8 @@ class LinuxMT5Adapter(MT5AdapterBase):
 
     def last_error(self) -> tuple[int, str]:
         """Get last error from MT5."""
+        if self._last_error_override is not None:
+            return self._last_error_override
         if self._conn:
             try:
                 return self._eval("mt5.last_error()")
