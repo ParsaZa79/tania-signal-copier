@@ -23,7 +23,19 @@ import { ModifyDialog } from "@/components/dashboard/modify-dialog";
 import { AnimatedSection, PageContainer } from "@/components/motion";
 import { PageLoading } from "@/components/layout";
 import { LegacyDialog as Dialog } from "@/components/ui/dialog";
-import { cancelOrder, closePosition, getPendingOrders, modifyPosition } from "@/lib/api";
+import {
+  cancelOrder,
+  closePosition,
+  getAccountInfo,
+  getPendingOrders,
+  getSymbolInfo,
+  modifyPosition,
+  type SymbolTradingInfo,
+} from "@/lib/api";
+import {
+  estimateTradeOutcome,
+  formatSignedCurrency,
+} from "@/lib/trade-estimate";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { PendingOrder, Position } from "@/types";
 
@@ -55,6 +67,14 @@ function formatPrice(value: number | null) {
   return value >= 100 ? value.toFixed(2) : value.toFixed(5);
 }
 
+function formatOptionalPrice(value: number) {
+  return value > 0 ? formatPrice(value) : "—";
+}
+
+function formatLeverage(value: number | null | undefined) {
+  return value && value > 0 ? `1:${Math.round(value)}` : "—";
+}
+
 function fullDate() {
   return new Intl.DateTimeFormat("en-US", {
     weekday: "long",
@@ -62,6 +82,35 @@ function fullDate() {
     day: "numeric",
     year: "numeric",
   }).format(new Date());
+}
+
+function estimatePendingOrderOutcomes(
+  order: PendingOrder,
+  symbolInfo: SymbolTradingInfo | null | undefined
+) {
+  if (!symbolInfo) return { potentialLoss: null, potentialProfit: null };
+
+  const isBuy = order.type.startsWith("buy");
+  const common = {
+    entryPrice: order.price_open,
+    isBuy,
+    point: symbolInfo.point,
+    tickValue: symbolInfo.trade_tick_value,
+    volume: order.volume,
+  };
+  const rawLoss =
+    order.sl > 0
+      ? estimateTradeOutcome({ ...common, exitPrice: order.sl })
+      : null;
+  const rawProfit =
+    order.tp > 0
+      ? estimateTradeOutcome({ ...common, exitPrice: order.tp })
+      : null;
+
+  return {
+    potentialLoss: rawLoss !== null && rawLoss < 0 ? rawLoss : null,
+    potentialProfit: rawProfit !== null && rawProfit > 0 ? rawProfit : null,
+  };
 }
 
 export default function PositionsPage() {
@@ -74,11 +123,24 @@ export default function PositionsPage() {
 
 function PositionsPageContent() {
   const searchParams = useSearchParams();
-  const { positions, reconnect, session, designPreview } = useDashboard();
+  const { account, positions, reconnect, session, designPreview } = useDashboard();
   const requestedTicket = Number(searchParams.get("ticket"));
   const openedRequestedTicketRef = useRef<number | null>(null);
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>(
     designPreview ? previewPendingOrders : []
+  );
+  const [pendingSymbolInfo, setPendingSymbolInfo] = useState<
+    Record<string, SymbolTradingInfo | null>
+  >({});
+  const [accountTradingDetails, setAccountTradingDetails] = useState<{
+    currency?: string;
+    leverage?: number;
+  } | null>(
+    designPreview
+      ? { currency: "USD", leverage: 100 }
+      : account
+        ? { currency: account.currency, leverage: account.leverage }
+        : null
   );
   const [pendingOpen, setPendingOpen] = useState(false);
   const [loadingPending, setLoadingPending] = useState(!designPreview);
@@ -87,6 +149,8 @@ function PositionsPageContent() {
   const [cancelCandidate, setCancelCandidate] = useState<PendingOrder | null>(null);
   const [cancellingTicket, setCancellingTicket] = useState<number | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const fallbackAccountCurrency = account?.currency;
+  const fallbackAccountLeverage = account?.leverage;
 
   const loadPendingOrders = useCallback(async () => {
     if (designPreview) {
@@ -113,6 +177,89 @@ function PositionsPageContent() {
     const timer = window.setInterval(loadPendingOrders, 5000);
     return () => window.clearInterval(timer);
   }, [designPreview, loadPendingOrders, session.activeAccountId]);
+
+  const pendingSymbolKey = useMemo(
+    () =>
+      Array.from(new Set(pendingOrders.map((order) => order.symbol)))
+        .sort()
+        .join("|"),
+    [pendingOrders]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const symbols = pendingSymbolKey ? pendingSymbolKey.split("|") : [];
+
+    if (symbols.length === 0) {
+      setPendingSymbolInfo({});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function loadPendingSymbolInfo() {
+      const entries = await Promise.all(
+        symbols.map(async (symbol) => {
+          try {
+            return [symbol, await getSymbolInfo(symbol)] as const;
+          } catch (error) {
+            console.error(`Failed to fetch ${symbol} trading info:`, error);
+            return [symbol, null] as const;
+          }
+        })
+      );
+      if (!cancelled) setPendingSymbolInfo(Object.fromEntries(entries));
+    }
+
+    void loadPendingSymbolInfo();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingSymbolKey, session.activeAccountId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (designPreview) {
+      setAccountTradingDetails({ currency: "USD", leverage: 100 });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function loadAccountTradingDetails() {
+      try {
+        const details = await getAccountInfo();
+        if (!cancelled) {
+          setAccountTradingDetails({
+            currency: details.currency,
+            leverage: details.leverage,
+          });
+        }
+      } catch (error) {
+        console.error("Failed to fetch account trading details:", error);
+        if (
+          !cancelled &&
+          (fallbackAccountCurrency || fallbackAccountLeverage)
+        ) {
+          setAccountTradingDetails({
+            currency: fallbackAccountCurrency,
+            leverage: fallbackAccountLeverage,
+          });
+        }
+      }
+    }
+
+    void loadAccountTradingDetails();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    designPreview,
+    fallbackAccountCurrency,
+    fallbackAccountLeverage,
+    session.activeAccountId,
+  ]);
 
   useEffect(() => {
     if (!Number.isFinite(requestedTicket) || requestedTicket <= 0) {
@@ -326,27 +473,20 @@ function PositionsPageContent() {
               ) : (
                 <div className="divide-y divide-border-subtle">
                   {pendingOrders.map((order) => (
-                    <div key={order.ticket} className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center">
-                      <div className="flex min-w-0 flex-1 items-center gap-3">
-                        <SymbolIcon symbol={order.symbol} size="lg" className="rounded-full" />
-                        <div>
-                          <p className="text-sm font-medium text-text-primary">
-                            {friendlyMarketName(order.symbol)} <span className="text-text-muted">· {order.symbol}</span>
-                          </p>
-                          <p className="mt-1 text-xs text-text-muted">
-                            Opens at {formatPrice(order.price_open)} · {order.volume} lots · Ticket #{order.ticket}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setCancelCandidate(order)}
-                        className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-danger/25 bg-danger/8 px-3 text-xs font-medium text-danger hover:bg-danger/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/50"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Cancel order
-                      </button>
-                    </div>
+                    <PendingOrderRow
+                      key={order.ticket}
+                      order={order}
+                      symbolInfo={pendingSymbolInfo[order.symbol]}
+                      accountCurrency={
+                        accountTradingDetails?.currency ??
+                        account?.currency ??
+                        "USD"
+                      }
+                      accountLeverage={
+                        accountTradingDetails?.leverage ?? account?.leverage
+                      }
+                      onCancel={() => setCancelCandidate(order)}
+                    />
                   ))}
                 </div>
               )}
@@ -391,6 +531,113 @@ function PositionsPageContent() {
         </div>
       </Dialog>
     </PageContainer>
+  );
+}
+
+function PendingOrderRow({
+  order,
+  symbolInfo,
+  accountCurrency,
+  accountLeverage,
+  onCancel,
+}: {
+  order: PendingOrder;
+  symbolInfo: SymbolTradingInfo | null | undefined;
+  accountCurrency: string;
+  accountLeverage: number | null | undefined;
+  onCancel: () => void;
+}) {
+  const { potentialLoss, potentialProfit } = estimatePendingOrderOutcomes(
+    order,
+    symbolInfo
+  );
+
+  return (
+    <div className="grid gap-5 py-5 xl:grid-cols-[minmax(150px,0.8fr)_minmax(360px,1.7fr)_minmax(220px,1fr)_auto] xl:items-center xl:gap-7">
+      <div className="flex min-w-0 items-center gap-3">
+        <SymbolIcon symbol={order.symbol} size="lg" className="rounded-full" />
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-text-primary">
+            {friendlyMarketName(order.symbol)}{" "}
+            <span className="text-text-muted">· {order.symbol}</span>
+          </p>
+        </div>
+      </div>
+
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+        <PendingOrderFact
+          label="Opening price"
+          value={formatPrice(order.price_open)}
+        />
+        <PendingOrderFact
+          label="Target price"
+          value={formatOptionalPrice(order.tp)}
+        />
+        <PendingOrderFact
+          label="Stop loss"
+          value={formatOptionalPrice(order.sl)}
+        />
+        <PendingOrderFact
+          label="Leverage"
+          value={formatLeverage(accountLeverage)}
+        />
+      </dl>
+
+      <dl className="grid grid-cols-2 gap-6 xl:min-w-[220px]">
+        <div>
+          <dt className="text-[11px] font-medium uppercase tracking-[0.06em] text-text-muted">
+            Potential loss
+          </dt>
+          <dd
+            className={cn(
+              "mt-1 text-base font-semibold tabular-nums",
+              potentialLoss === null ? "text-text-muted" : "text-danger"
+            )}
+          >
+            {potentialLoss === null
+              ? "—"
+              : formatSignedCurrency(potentialLoss, accountCurrency)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[11px] font-medium uppercase tracking-[0.06em] text-text-muted">
+            Potential profit
+          </dt>
+          <dd
+            className={cn(
+              "mt-1 text-base font-semibold tabular-nums",
+              potentialProfit === null ? "text-text-muted" : "text-success"
+            )}
+          >
+            {potentialProfit === null
+              ? "—"
+              : formatSignedCurrency(potentialProfit, accountCurrency)}
+          </dd>
+        </div>
+      </dl>
+
+      <button
+        type="button"
+        onClick={onCancel}
+        className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-danger/25 bg-danger/8 px-3 text-xs font-medium text-danger hover:bg-danger/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/50"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        Cancel order
+      </button>
+    </div>
+  );
+}
+
+function PendingOrderFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] font-medium uppercase tracking-[0.06em] text-text-muted">
+        {label}
+      </dt>
+      <dd className="mt-1 truncate text-sm font-semibold tabular-nums text-text-primary">
+        {value}
+      </dd>
+    </div>
   );
 }
 
@@ -507,6 +754,9 @@ function PriceFact({ label, value, className }: { label: string; value: string; 
 }
 
 export const positionsPageTestHelpers = {
+  estimatePendingOrderOutcomes,
+  formatLeverage,
+  formatOptionalPrice,
   formatPrice,
   friendlyMarketName,
 };

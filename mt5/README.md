@@ -62,6 +62,19 @@ docker run --rm -v trading-mt5-config:/config:ro -v "$PWD":/backup alpine:3.22 \
   tar czf /backup/mt5-config.pre-6.0.2.tgz -C /config .
 ```
 
+## Persistent automated trading
+
+MT5 starts with `/config:C:\mt5-autotrading.ini`. The configuration enables
+automated trading and prevents account or profile changes from switching it
+back off. Production stores this file in the persistent MT5 volume at
+`/config/.wine/drive_c/mt5-autotrading.ini`; provision it from
+`mt5/autotrading.ini` before starting or recreating the service. The local
+Compose file mounts the tracked configuration directly.
+
+Verify the setting without placing an order by reading `terminal_info()` through
+the private RPyC bridge. Both `trade_allowed` and `connected` must be true, while
+`tradeapi_disabled` must be false.
+
 Promotion criteria: effective Compose config contains only
 `trading-mt5-api` and `trading-mt5-egress`; only MT5 is attached to the egress
 bridge; RPyC has no published host port; VNC is loopback-only; the container

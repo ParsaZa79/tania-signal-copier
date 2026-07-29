@@ -10,6 +10,7 @@ MT5 = REPO_ROOT / "mt5"
 IMAGE = "trading-platform/mt5-rpyc:6.0.2"
 NETWORK = "trading-mt5-api"
 EGRESS_NETWORK = "trading-mt5-egress"
+AUTOTRADING_OPTIONS = r"/config:C:\mt5-autotrading.ini"
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -63,6 +64,7 @@ def test_effective_local_bindings_are_loopback_only_and_exact_image() -> None:
     service = config["services"]["mt5"]
 
     assert service["image"] == IMAGE
+    assert service["environment"]["MT5_CMD_OPTIONS"] == AUTOTRADING_OPTIONS
     assert service.get("network_mode") != "host"
     assert {
         (port["target"], port["published"], port["host_ip"])
@@ -75,6 +77,7 @@ def test_effective_production_network_is_dedicated_and_rpyc_is_not_published() -
     service = config["services"]["mt5"]
 
     assert service["image"] == IMAGE
+    assert service["environment"]["MT5_CMD_OPTIONS"] == AUTOTRADING_OPTIONS
     assert "build" not in service
     assert set(service["networks"]) == {NETWORK, EGRESS_NETWORK}
     assert all(port["target"] != 8001 for port in service.get("ports", []))
@@ -135,3 +138,14 @@ def test_compose_volume_identity_persists_across_recreate() -> None:
         assert mount["target"] == "/config"
         assert mount["source"] in config["volumes"]
         assert config["volumes"][mount["source"]]["name"] == expected
+
+
+def test_autotrading_startup_config_survives_account_and_profile_changes() -> None:
+    config = (MT5 / "autotrading.ini").read_text(encoding="utf-8")
+
+    assert "[Experts]" in config
+    assert "AllowLiveTrading=1" in config
+    assert "Enabled=1" in config
+    assert "Account=0" in config
+    assert "Profile=0" in config
+    assert "Api=0" in config

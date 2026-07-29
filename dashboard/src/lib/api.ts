@@ -342,8 +342,25 @@ export interface SymbolListItem {
   label: string;
 }
 
+export interface SymbolTradingInfo {
+  symbol: string;
+  digits: number;
+  point: number;
+  volume_min: number;
+  volume_max: number;
+  volume_step: number;
+  trade_tick_value: number;
+  visible: boolean;
+}
+
 export async function getSymbols(): Promise<SymbolListItem[]> {
   return fetchApi("/api/symbols");
+}
+
+export async function getSymbolInfo(
+  symbol: string
+): Promise<SymbolTradingInfo> {
+  return fetchApi(`/api/symbols/${toBrokerSymbol(symbol)}/info`);
 }
 
 export async function getSymbolPrice(

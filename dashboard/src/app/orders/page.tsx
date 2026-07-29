@@ -13,7 +13,13 @@ import {
 } from "@/components/orders/guided-order-ticket";
 import { LiveMarketChart } from "@/components/orders/live-market-chart";
 import { AnimatedSection, PageContainer } from "@/components/motion";
-import { getSymbolPrice, getSymbols, type SymbolListItem } from "@/lib/api";
+import {
+  getSymbolInfo,
+  getSymbolPrice,
+  getSymbols,
+  type SymbolListItem,
+  type SymbolTradingInfo,
+} from "@/lib/api";
 import { normalizeSymbol } from "@/lib/symbol-icon-resolver";
 import { cn } from "@/lib/utils";
 
@@ -65,13 +71,16 @@ export default function OrdersPage() {
 
 function OrdersPageContent() {
   const searchParams = useSearchParams();
-  const { reconnect, session, designPreview } = useDashboard();
+  const { account, reconnect, session, designPreview } = useDashboard();
   const requestedSymbol = searchParams.get("symbol") ?? undefined;
   const previewChart =
     process.env.NODE_ENV === "development" &&
     searchParams.get("previewChart") === "true";
   const [symbols, setSymbols] = useState<SymbolListItem[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState("");
+  const [selectedSymbolInfo, setSelectedSymbolInfo] = useState<
+    SymbolTradingInfo | null | undefined
+  >(undefined);
   const [prices, setPrices] = useState<Record<string, LivePrice>>({});
   const [isLoadingSymbols, setIsLoadingSymbols] = useState(true);
   const [isLoadingPrices, setIsLoadingPrices] = useState(true);
@@ -153,6 +162,32 @@ function OrdersPageContent() {
     return () => window.clearInterval(interval);
   }, [fetchPrices, visibleMarkets.length]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedSymbolInfo(undefined);
+
+    if (!selectedSymbol) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function loadSymbolInfo() {
+      try {
+        const info = await getSymbolInfo(selectedSymbol);
+        if (!cancelled) setSelectedSymbolInfo(info);
+      } catch (error) {
+        console.error(`Failed to fetch ${selectedSymbol} trading info:`, error);
+        if (!cancelled) setSelectedSymbolInfo(null);
+      }
+    }
+
+    void loadSymbolInfo();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSymbol, session.activeAccountId]);
+
   if (isLoadingSymbols) {
     return <PageLoading label="Opening order ticket…" />;
   }
@@ -178,6 +213,8 @@ function OrdersPageContent() {
             selectedSymbol={selectedSymbol}
             onSymbolChange={setSelectedSymbol}
             price={selectedPrice}
+            symbolInfo={selectedSymbolInfo}
+            accountCurrency={account?.currency ?? "USD"}
             accountId={session.activeAccountId ?? undefined}
             designPreview={designPreview}
             onSuccess={reconnect}

@@ -20,6 +20,8 @@ export interface AccountInfo {
   margin: number;
   free_margin: number;
   profit: number;
+  leverage?: number;
+  currency?: string;
 }
 
 // Order types

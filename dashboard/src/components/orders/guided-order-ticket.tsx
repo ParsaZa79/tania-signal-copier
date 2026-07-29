@@ -18,7 +18,12 @@ import { Select } from "@/components/ui/select";
 import {
   placeOrder,
   type SymbolListItem,
+  type SymbolTradingInfo,
 } from "@/lib/api";
+import {
+  estimateTradeOutcome,
+  formatSignedCurrency,
+} from "@/lib/trade-estimate";
 import { cn } from "@/lib/utils";
 import type { OrderType, PlaceOrderRequest } from "@/types";
 import {
@@ -50,6 +55,8 @@ interface GuidedOrderTicketProps {
   selectedSymbol: string;
   onSymbolChange: (symbol: string) => void;
   price?: LivePrice;
+  symbolInfo?: SymbolTradingInfo | null;
+  accountCurrency?: string;
   accountId?: string;
   designPreview?: boolean;
   onSuccess?: () => void;
@@ -128,6 +135,8 @@ export function GuidedOrderTicket({
   selectedSymbol,
   onSymbolChange,
   price,
+  symbolInfo,
+  accountCurrency = "USD",
   designPreview,
   onSuccess,
 }: GuidedOrderTicketProps) {
@@ -153,6 +162,37 @@ export function GuidedOrderTicket({
   const parsedVolume = Number.parseFloat(formData.volume) || 0;
   const troyOunceAmount = parsedVolume * 100;
   const priceStep = (price?.bid ?? 0) >= 100 ? 0.01 : 0.00001;
+  const entryPrice = isPending
+    ? Number.parseFloat(formData.price)
+    : isBuy
+      ? price?.ask
+      : price?.bid;
+  const stopLossPrice = Number.parseFloat(formData.sl);
+  const takeProfitPrice = Number.parseFloat(formData.tp);
+  const potentialLoss =
+    entryPrice !== undefined && symbolInfo && formData.sl
+      ? estimateTradeOutcome({
+          entryPrice,
+          exitPrice: stopLossPrice,
+          isBuy,
+          point: symbolInfo.point,
+          tickValue: symbolInfo.trade_tick_value,
+          volume: parsedVolume,
+        })
+      : null;
+  const potentialProfit =
+    entryPrice !== undefined && symbolInfo && formData.tp
+      ? estimateTradeOutcome({
+          entryPrice,
+          exitPrice: takeProfitPrice,
+          isBuy,
+          point: symbolInfo.point,
+          tickValue: symbolInfo.trade_tick_value,
+          volume: parsedVolume,
+        })
+      : null;
+  const hasValidLoss = potentialLoss !== null && potentialLoss < 0;
+  const hasValidProfit = potentialProfit !== null && potentialProfit > 0;
 
   const setDirection = (nextIsBuy: boolean) => {
     const nextType: OrderType = isPending
@@ -534,12 +574,43 @@ export function GuidedOrderTicket({
                     {selectedSymbol || "the selected market"}{" "}
                     {isPending ? `at ${formData.price || "your chosen price"}` : "at market"}
                   </p>
-                  <p className="mt-1 text-xs text-text-muted">
-                    Estimated spread: {price ? `${price.spread} points` : "loading"}
-                    {!formData.sl && " · No stop loss set"}
-                  </p>
                 </div>
               </div>
+              <dl
+                data-testid="order-outcome-estimates"
+                className="mt-3 grid grid-cols-2 divide-x divide-border-subtle border-t border-border-subtle pt-3"
+              >
+                <div className="min-w-0 pr-4">
+                  <dt className="text-[11px] font-medium uppercase tracking-[0.06em] text-text-muted">
+                    Potential loss
+                  </dt>
+                  <dd
+                    className={cn(
+                      "mt-1 text-lg font-semibold tabular-nums",
+                      hasValidLoss ? "text-danger" : "text-text-muted"
+                    )}
+                  >
+                    {hasValidLoss
+                      ? formatSignedCurrency(potentialLoss, accountCurrency)
+                      : "—"}
+                  </dd>
+                </div>
+                <div className="min-w-0 pl-4">
+                  <dt className="text-[11px] font-medium uppercase tracking-[0.06em] text-text-muted">
+                    Potential profit
+                  </dt>
+                  <dd
+                    className={cn(
+                      "mt-1 text-lg font-semibold tabular-nums",
+                      hasValidProfit ? "text-success" : "text-text-muted"
+                    )}
+                  >
+                    {hasValidProfit
+                      ? formatSignedCurrency(potentialProfit, accountCurrency)
+                      : "—"}
+                  </dd>
+                </div>
+              </dl>
             </div>
           </section>
 
@@ -590,6 +661,18 @@ export function GuidedOrderTicket({
                 ],
                 ["Stop loss", formData.sl || "Not set"],
                 ["Take profit", formData.tp || "Not set"],
+                [
+                  "Potential loss",
+                  hasValidLoss
+                    ? formatSignedCurrency(potentialLoss, accountCurrency)
+                    : "—",
+                ],
+                [
+                  "Potential profit",
+                  hasValidProfit
+                    ? formatSignedCurrency(potentialProfit, accountCurrency)
+                    : "—",
+                ],
                 ["Estimated spread", price ? `${price.spread} points` : "—"],
               ].map(([label, value]) => (
                 <div

@@ -8,11 +8,13 @@ services:
     environment:
       CUSTOM_USER: ${MT5_VNC_USER:-local}
       PASSWORD: ${MT5_VNC_PASSWORD:?set MT5_VNC_PASSWORD}
+      MT5_CMD_OPTIONS: '/config:C:\mt5-autotrading.ini'
     ports:
       - "127.0.0.1:${MT5_VNC_PORT:-3000}:3000"
       - "127.0.0.1:${MT5_RPYC_PORT:-8001}:8001"
     volumes:
       - mt5-config-local:/config
+      - ./autotrading.ini:/config/.wine/drive_c/mt5-autotrading.ini:ro
 
 volumes:
   mt5-config-local:
