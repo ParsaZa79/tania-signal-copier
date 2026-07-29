@@ -9,6 +9,7 @@ import {
   CalendarDays,
   Check,
   CircleAlert,
+  Clock3,
   Globe2,
   Info,
   LockKeyhole,
@@ -103,9 +104,11 @@ const PREVIEW_TRADERS: CopyTrader[] = [
       max_drawdown_pct: -6.3,
       track_record_days: 1260,
       trade_count: 418,
+      pending_order_count: 0,
       follower_count: 532,
       data_source: "connected_mt5",
     },
+    pending_orders: [],
     stats_updated_at: "2026-07-18T08:15:00Z",
     created_at: "2023-02-01T00:00:00Z",
     updated_at: "2026-07-18T08:15:00Z",
@@ -123,9 +126,11 @@ const PREVIEW_TRADERS: CopyTrader[] = [
       max_drawdown_pct: -4.8,
       track_record_days: 820,
       trade_count: 296,
+      pending_order_count: 0,
       follower_count: 318,
       data_source: "connected_mt5",
     },
+    pending_orders: [],
     stats_updated_at: "2026-07-18T08:10:00Z",
     created_at: "2024-04-20T00:00:00Z",
     updated_at: "2026-07-18T08:10:00Z",
@@ -143,9 +148,11 @@ const PREVIEW_TRADERS: CopyTrader[] = [
       max_drawdown_pct: -3.9,
       track_record_days: 550,
       trade_count: 184,
+      pending_order_count: 0,
       follower_count: 204,
       data_source: "connected_mt5",
     },
+    pending_orders: [],
     stats_updated_at: "2026-07-18T08:05:00Z",
     created_at: "2025-01-14T00:00:00Z",
     updated_at: "2026-07-18T08:05:00Z",
@@ -180,6 +187,22 @@ function traderImage(trader: CopyTrader, index: number): string | null {
   return null;
 }
 
+function pendingOrderType(type: string): string {
+  return type
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function pendingOrderCountLabel(count: number): string {
+  return `${count} pending ${count === 1 ? "order" : "orders"}`;
+}
+
+function pendingPrice(value: number | null): string {
+  return value && value > 0 ? value.toFixed(value >= 100 ? 2 : 5) : "—";
+}
+
 function formatPercent(value: number | null, includePlus = false) {
   if (value === null) return "Not enough history";
   const sign = includePlus && value > 0 ? "+" : "";
@@ -187,6 +210,7 @@ function formatPercent(value: number | null, includePlus = false) {
 }
 
 function trackRecord(days: number) {
+  if (days <= 0) return "No closed trades";
   if (days < 31) return `${days} days`;
   if (days < 365) return `${Math.max(1, Math.round(days / 30))} months`;
   const years = days / 365;
@@ -215,7 +239,10 @@ export function CopyTradingClient() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { account: activeBrokerAccount } = useDashboard();
+  const {
+    account: activeBrokerAccount,
+    isConnected: brokerConnected,
+  } = useDashboard();
   const preview = searchParams.get("preview") === "1";
   const currentView: CopyView = searchParams.get("view") === "share" ? "share" : "copy";
 
@@ -265,7 +292,7 @@ export function CopyTradingClient() {
 
   useEffect(() => {
     if (preview) return;
-    const timer = window.setTimeout(async () => {
+    const refreshDirectory = async () => {
       try {
         const result = await getCopyDirectory({ search, market: market || undefined });
         setTraders(result.traders);
@@ -274,12 +301,24 @@ export function CopyTradingClient() {
             ? current
             : result.traders[0]?.id ?? ""
         );
+        setPageError(null);
       } catch (error) {
         setPageError(error instanceof Error ? error.message : "Could not load traders");
       }
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [market, preview, search]);
+    };
+
+    const timer = window.setTimeout(
+      () => void refreshDirectory(),
+      brokerConnected ? 0 : 250
+    );
+    const interval = brokerConnected
+      ? window.setInterval(() => void refreshDirectory(), 15_000)
+      : null;
+    return () => {
+      window.clearTimeout(timer);
+      if (interval !== null) window.clearInterval(interval);
+    };
+  }, [brokerConnected, market, preview, search]);
 
   const filteredTraders = useMemo(() => {
     const normalized = search.trim().toLowerCase();
@@ -676,6 +715,7 @@ function TraderRow({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const pendingCount = trader.pending_orders?.length ?? 0;
   return (
     <button
       type="button"
@@ -692,7 +732,15 @@ function TraderRow({
           <span className="truncate text-base font-semibold text-text-primary">{trader.display_name}</span>
           <BadgeCheck className="h-4 w-4 shrink-0 text-success" aria-label="Connected broker data" />
         </span>
-        <span className="mt-1 block truncate text-sm text-text-muted">{trader.markets.join(", ")}</span>
+        <span className="mt-1 block truncate text-sm text-text-muted">
+          {trader.markets.join(", ") || "No executed markets yet"}
+        </span>
+        {pendingCount > 0 && (
+          <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-accent/20 bg-accent/10 px-2 py-1 text-xs font-medium text-accent">
+            <Clock3 className="h-3.5 w-3.5" />
+            {pendingOrderCountLabel(pendingCount)}
+          </span>
+        )}
       </span>
       <span className="col-span-2 grid grid-cols-2 gap-3 text-left sm:col-auto sm:min-w-28 sm:grid-cols-1 sm:gap-2 sm:text-right">
         <span>
@@ -713,6 +761,8 @@ function TraderRow({
 }
 
 function TraderDetail({ trader, image, onStart }: { trader: CopyTrader; image: string | null; onStart: () => void }) {
+  const pendingOrders = trader.pending_orders ?? [];
+  const hasPerformanceHistory = trader.statistics.trade_count > 0;
   return (
     <article className="rounded-2xl border border-border-subtle bg-bg-secondary/65 p-5 lg:p-6">
       <div className="flex items-start gap-4">
@@ -730,15 +780,72 @@ function TraderDetail({ trader, image, onStart }: { trader: CopyTrader; image: s
         <Stat label="90-day return" value={formatPercent(trader.statistics.return_90d_pct, true)} accent />
         <Stat label="Trading history" value={trackRecord(trader.statistics.track_record_days)} />
         <Stat label="Largest drop" value={formatPercent(trader.statistics.max_drawdown_pct)} />
-        <Stat label="Markets traded" value={trader.markets.join(", ")} />
+        <Stat label="Markets" value={trader.markets.join(", ") || "None yet"} />
       </dl>
+
+      {pendingOrders.length > 0 && (
+        <section className="mt-4 overflow-hidden rounded-xl border border-border-subtle bg-bg-primary/35">
+          <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+            <div>
+              <h4 className="text-sm font-semibold text-text-primary">Pending orders</h4>
+              <p className="mt-0.5 text-xs text-text-muted">
+                Waiting for the broker entry price
+              </p>
+            </div>
+            <span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent">
+              {pendingOrders.length}
+            </span>
+          </div>
+          <div className="divide-y divide-border-subtle">
+            {pendingOrders.map((order, index) => (
+              <div
+                key={`${order.symbol}-${order.type}-${order.price_open}-${index}`}
+                className="px-4 py-3"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-text-primary">
+                      {order.symbol} · {pendingOrderType(order.type)}
+                    </p>
+                    <p className="mt-1 text-xs text-text-muted">
+                      {order.volume.toFixed(2)} lots
+                    </p>
+                  </div>
+                  <p className="text-right text-sm font-medium tabular-nums text-text-primary">
+                    {pendingPrice(order.price_open)}
+                    <span className="mt-0.5 block text-[11px] font-normal text-text-muted">
+                      Entry
+                    </span>
+                  </p>
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-3">
+                  <div>
+                    <dt className="text-[11px] text-text-muted">Stop loss</dt>
+                    <dd className="mt-0.5 text-sm tabular-nums text-danger">
+                      {pendingPrice(order.sl)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] text-text-muted">Target price</dt>
+                    <dd className="mt-0.5 text-sm tabular-nums text-success">
+                      {pendingPrice(order.tp)}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="mt-4">
         <h4 className="flex items-center gap-2 text-sm font-medium text-text-primary">
           What these numbers mean <Info className="h-3.5 w-3.5 text-text-muted" />
         </h4>
         <p className="mt-2 text-sm leading-5 text-text-muted">
-          The return covers the last 90 days. Largest drop is the biggest fall from a high point during that period. Past results do not promise future results.
+          {pendingOrders.length > 0 && !hasPerformanceHistory
+            ? "This trader has pending orders, but no closed-trade performance yet. Pending orders do not affect return or largest drop until they execute and eventually close."
+            : "The return covers the last 90 days. Largest drop is the biggest fall from a high point during that period. Past results do not promise future results."}
         </p>
       </div>
 

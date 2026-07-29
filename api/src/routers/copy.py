@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 from typing import Annotated, Any
@@ -11,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from src.config import config
 from src.db.runtime import DatabaseSession
+from src.dependencies import get_executor_for_account_id, is_account_runtime_active
 from src.models.account import TradingAccount
 from src.models.audit import AuditEvent
 from src.models.copy import (
@@ -33,6 +35,7 @@ from src.schemas.copy import (
 )
 from src.security import get_current_user
 from src.services.copy_worker import RuntimeManagerClient, RuntimeManagerError
+from src.symbol_utils import to_base_symbol
 
 router = APIRouter()
 internal_router = APIRouter()
@@ -45,9 +48,7 @@ def _domain_error(error: Exception) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
 
 
-async def _prepare(
-    session: DatabaseSession, current_user: dict[str, Any]
-) -> list[dict[str, Any]]:
+async def _prepare(session: DatabaseSession, current_user: dict[str, Any]) -> list[dict[str, Any]]:
     return await repository.ensure_copy_identity(session, current_user)
 
 
@@ -85,6 +86,51 @@ def _runtime_payload(runtime: Any | None) -> dict[str, Any] | None:
     }
 
 
+def merge_live_pending_orders(
+    traders: list[dict[str, Any]],
+    *,
+    account_id: str,
+    orders: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach sanitized live pending instructions to one public trader profile."""
+    pending_orders = repository.sanitize_pending_orders(orders)
+    for trader in traders:
+        if trader.get("account_id") != account_id:
+            continue
+        trader["pending_orders"] = pending_orders
+        trader.setdefault("statistics", {})["pending_order_count"] = len(pending_orders)
+        trader["markets"] = list(
+            dict.fromkeys(
+                [
+                    *(str(market).upper() for market in trader.get("markets", [])),
+                    *(order["symbol"] for order in pending_orders),
+                ]
+            )
+        )
+    return traders
+
+
+async def _with_active_pending_orders(
+    traders: list[dict[str, Any]],
+    current_user: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Enrich the active account without switching or taking over the MT5 runtime."""
+    legacy_account_id = str(current_user.get("active_account_id") or "").strip()
+    if not legacy_account_id or not is_account_runtime_active(legacy_account_id):
+        return traders
+
+    executor = get_executor_for_account_id(legacy_account_id)
+    try:
+        orders = await asyncio.to_thread(executor.get_pending_orders)
+    except Exception:
+        return traders
+    return merge_live_pending_orders(
+        traders,
+        account_id=str(repository.copy_account_uuid(legacy_account_id)),
+        orders=orders,
+    )
+
+
 @router.get("/directory")
 async def directory(
     session: DatabaseSession,
@@ -93,9 +139,30 @@ async def directory(
     market: str | None = Query(default=None, max_length=40),
 ) -> dict[str, Any]:
     await _prepare(session, current_user)
+    # Apply discovery filters after live enrichment so an account whose only
+    # activity is a pending order remains discoverable by that order's market.
+    traders = await repository.list_directory(session)
+    traders = await _with_active_pending_orders(traders, current_user)
+    normalized_search = search.strip().lower()
+    if normalized_search:
+        traders = [
+            trader
+            for trader in traders
+            if normalized_search
+            in " ".join(
+                [
+                    str(trader.get("display_name") or ""),
+                    str(trader.get("description") or ""),
+                    *trader.get("markets", []),
+                ]
+            ).lower()
+        ]
+    if market:
+        normalized_market = to_base_symbol(market.strip())
+        traders = [trader for trader in traders if normalized_market in trader.get("markets", [])]
     return {
         "success": True,
-        "traders": await repository.list_directory(session, search=search, market=market),
+        "traders": traders,
         "ranking": "neutral",
     }
 
@@ -104,20 +171,18 @@ async def directory(
 async def overview(session: DatabaseSession, current_user: CurrentUser) -> dict[str, Any]:
     accounts = await _prepare(session, current_user)
     owned = await repository.list_owned_traders(session, current_user["id"])
+    owned = await _with_active_pending_orders(owned, current_user)
     subscriptions = await repository.list_subscriptions(session, current_user["id"])
     executions = await repository.list_executions(session, current_user["id"])
     runtimes = []
     for account in accounts:
         runtime = await repository.runtime_for_account(session, account["id"])
         runtimes.append(
-            _runtime_payload(runtime)
-            or {"account_id": str(account["id"]), "status": "offline"}
+            _runtime_payload(runtime) or {"account_id": str(account["id"]), "status": "offline"}
         )
     return {
         "success": True,
-        "accounts": [
-            {**item, "id": str(item["id"])} for item in accounts
-        ],
+        "accounts": [{**item, "id": str(item["id"])} for item in accounts],
         "owned_traders": owned,
         "subscriptions": subscriptions,
         "recent_executions": executions[:20],
@@ -132,9 +197,10 @@ async def overview(session: DatabaseSession, current_user: CurrentUser) -> dict[
 @router.get("/traders")
 async def owned_traders(session: DatabaseSession, current_user: CurrentUser) -> dict[str, Any]:
     await _prepare(session, current_user)
+    traders = await repository.list_owned_traders(session, current_user["id"])
     return {
         "success": True,
-        "traders": await repository.list_owned_traders(session, current_user["id"]),
+        "traders": await _with_active_pending_orders(traders, current_user),
     }
 
 
@@ -404,9 +470,7 @@ async def stop_account_copying(
         session,
         actor_user_id=current_user["id"],
         action=(
-            "copy.account.emergency_closed"
-            if request.close_positions
-            else "copy.account.paused"
+            "copy.account.emergency_closed" if request.close_positions else "copy.account.paused"
         ),
         target_type="trading_account",
         target_id=str(account_id),

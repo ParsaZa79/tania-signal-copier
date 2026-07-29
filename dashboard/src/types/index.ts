@@ -128,8 +128,18 @@ export interface CopyTraderStatistics {
   max_drawdown_pct: number | null;
   track_record_days: number;
   trade_count: number;
+  pending_order_count: number;
   follower_count: number;
   data_source: "connected_mt5";
+}
+
+export interface CopyTraderPendingOrder {
+  symbol: string;
+  type: string;
+  volume: number;
+  price_open: number;
+  sl: number | null;
+  tp: number | null;
 }
 
 export interface CopyTrader {
@@ -140,6 +150,7 @@ export interface CopyTrader {
   description: string;
   is_copyable: boolean;
   markets: string[];
+  pending_orders: CopyTraderPendingOrder[];
   statistics: CopyTraderStatistics;
   stats_updated_at: string | null;
   created_at: string;

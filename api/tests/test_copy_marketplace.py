@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.routers.copy import merge_live_pending_orders
 from src.services.copy_legacy_migration import _load_legacy_records
 from src.services.copy_worker import calculate_risk_volume, evaluate_risk_limits
 
@@ -89,3 +90,53 @@ def test_daily_and_combined_open_risk_limits() -> None:
 
     assert daily == "daily_loss_limit_reached"
     assert combined == "combined_open_risk_limit_reached"
+
+
+def test_live_pending_orders_are_attached_to_the_matching_public_trader() -> None:
+    traders = [
+        {
+            "account_id": "active-account",
+            "markets": [],
+            "pending_orders": [],
+            "statistics": {"pending_order_count": 0},
+        },
+        {
+            "account_id": "other-account",
+            "markets": ["EURUSD"],
+            "pending_orders": [],
+            "statistics": {"pending_order_count": 0},
+        },
+    ]
+
+    result = merge_live_pending_orders(
+        traders,
+        account_id="active-account",
+        orders=[
+            {
+                "ticket": 199898322,
+                "symbol": "XAUUSDb",
+                "type": 3,
+                "volume": 0.01,
+                "price_open": 4069,
+                "sl": 4092,
+                "tp": 4028,
+                "comment": "private broker comment",
+            }
+        ],
+    )
+
+    active = result[0]
+    assert active["statistics"]["pending_order_count"] == 1
+    assert active["markets"] == ["XAUUSD"]
+    assert active["pending_orders"] == [
+        {
+            "symbol": "XAUUSD",
+            "type": "sell_limit",
+            "volume": 0.01,
+            "price_open": 4069.0,
+            "sl": 4092.0,
+            "tp": 4028.0,
+        }
+    ]
+    assert "ticket" not in active["pending_orders"][0]
+    assert result[1]["pending_orders"] == []

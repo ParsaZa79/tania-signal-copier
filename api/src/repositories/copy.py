@@ -28,6 +28,7 @@ from src.models.copy import (
 )
 from src.models.user import UserRole, UserStatus
 from src.repositories.users import reconcile_verified_user_profile
+from src.symbol_utils import to_base_symbol
 
 RISK_PRESETS: dict[CopyRiskPreset, dict[str, float | int]] = {
     CopyRiskPreset.CONSERVATIVE: {
@@ -48,6 +49,15 @@ RISK_PRESETS: dict[CopyRiskPreset, dict[str, float | int]] = {
         "total_open_risk_pct": 1.0,
         "max_open_trades": 3,
     },
+}
+
+_PENDING_ORDER_TYPES = {
+    2: "buy_limit",
+    3: "sell_limit",
+    4: "buy_stop",
+    5: "sell_stop",
+    6: "buy_stop_limit",
+    7: "sell_stop_limit",
 }
 
 
@@ -136,8 +146,42 @@ async def _flush_and_refresh(session: AsyncSession, record: Any) -> None:
     await session.refresh(record)
 
 
+def sanitize_pending_orders(orders: object) -> list[dict[str, Any]]:
+    """Return the public, broker-agnostic fields for pending orders."""
+    if not isinstance(orders, list):
+        return []
+
+    pending_orders: list[dict[str, Any]] = []
+    for order in orders:
+        if not isinstance(order, dict):
+            continue
+        symbol = to_base_symbol(str(order.get("symbol") or ""))
+        if not symbol:
+            continue
+        raw_type = order.get("type")
+        try:
+            numeric_type = int(raw_type)
+        except (TypeError, ValueError):
+            numeric_type = -1
+        pending_orders.append(
+            {
+                "symbol": symbol,
+                "type": _PENDING_ORDER_TYPES.get(
+                    numeric_type,
+                    str(raw_type or "pending").strip().lower(),
+                ),
+                "volume": float(order.get("volume") or 0),
+                "price_open": float(order.get("price_open") or 0),
+                "sl": float(order["sl"]) if order.get("sl") else None,
+                "tp": float(order["tp"]) if order.get("tp") else None,
+            }
+        )
+    return pending_orders
+
+
 def serialize_trader(profile: CopyTraderProfile, follower_count: int = 0) -> dict[str, Any]:
     stats = profile.statistics or {}
+    pending_orders = sanitize_pending_orders(stats.get("pending_orders"))
     return {
         "id": str(profile.id),
         "account_id": str(profile.account_id),
@@ -146,11 +190,13 @@ def serialize_trader(profile: CopyTraderProfile, follower_count: int = 0) -> dic
         "description": profile.description,
         "is_copyable": profile.is_copyable,
         "markets": profile.markets or [],
+        "pending_orders": pending_orders,
         "statistics": {
             "return_90d_pct": stats.get("return_90d_pct"),
             "max_drawdown_pct": stats.get("max_drawdown_pct"),
             "track_record_days": stats.get("track_record_days", 0),
             "trade_count": stats.get("trade_count", 0),
+            "pending_order_count": len(pending_orders),
             "follower_count": follower_count,
             "data_source": "connected_mt5",
         },
@@ -280,6 +326,14 @@ async def update_trader_statistics(
         )
         if key in statistics
     }
+    if "pending_orders" in statistics:
+        allowed_statistics["pending_orders"] = sanitize_pending_orders(
+            statistics.get("pending_orders")
+        )
+    else:
+        allowed_statistics["pending_orders"] = list(
+            (profile.statistics or {}).get("pending_orders", [])
+        )
     profile.statistics = allowed_statistics
     profile.markets = list(
         dict.fromkeys(market.strip().upper() for market in markets if market.strip())
@@ -299,9 +353,7 @@ async def patch_trader(
     profile = await session.get(CopyTraderProfile, trader_id)
     if profile is None:
         raise ValueError("Trader not found")
-    await require_account_role(
-        session, user_id=user_id, account_id=profile.account_id, write=True
-    )
+    await require_account_role(session, user_id=user_id, account_id=profile.account_id, write=True)
     if profile.owner_user_id != user_id:
         raise PermissionError("Trader profile owner access required")
     for field in ("display_name", "description", "is_copyable"):
@@ -396,9 +448,7 @@ async def create_subscription(
     country_code: str | None,
     disclosure_version: str | None,
 ) -> CopySubscription:
-    await require_account_role(
-        session, user_id=user_id, account_id=follower_account_id, write=True
-    )
+    await require_account_role(session, user_id=user_id, account_id=follower_account_id, write=True)
     trader = await session.get(CopyTraderProfile, trader_id)
     if trader is None or not trader.is_copyable:
         raise ValueError("Trader is not available to copy")
@@ -544,8 +594,7 @@ async def activate_live_subscription(
                 select(CopyTraderProfile.markets)
                 .join(CopySubscription, CopySubscription.trader_id == CopyTraderProfile.id)
                 .where(
-                    CopySubscription.follower_account_id
-                    == subscription.follower_account_id,
+                    CopySubscription.follower_account_id == subscription.follower_account_id,
                     CopySubscription.id != subscription.id,
                     CopySubscription.status.in_(
                         [CopySubscriptionStatus.ACTIVE, CopySubscriptionStatus.PAUSED]

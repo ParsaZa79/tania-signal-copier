@@ -46,7 +46,17 @@ Each connected MT5 account has its own managed runtime. Heartbeats include accou
     "return_90d_pct": 8.4,
     "max_drawdown_pct": 4.1,
     "track_record_days": 420,
-    "trade_count": 286
+    "trade_count": 286,
+    "pending_orders": [
+      {
+        "symbol": "XAUUSD",
+        "type": "sell_limit",
+        "volume": 0.01,
+        "price_open": 4069,
+        "sl": 4092,
+        "tp": 4028
+      }
+    ]
   },
   "symbol_specs": {
     "XAUUSD": {
